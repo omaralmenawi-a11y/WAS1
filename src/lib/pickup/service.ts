@@ -6,7 +6,7 @@ import { writeAudit } from '../audit';
 import { assertBranchAccess } from '../authz';
 import { Conflict, Forbidden, NotFound, RateLimitError, ValidationError } from '../errors';
 import { buildScheduleCtxs, listChildrenForUser, SCHEDULE_INCLUDE } from '../guardian/children';
-import { notify, notifyInBackground } from '../notify';
+import { notify, notifyInBackground, type NotificationPayload } from '../notify';
 import { msgCancelled, msgDelivered, msgPreparing, msgReady } from '../notify/messages';
 import { linkedGuardianIds } from '../notify/recipients';
 import { emitPickupChanged } from '../realtime';
@@ -97,13 +97,20 @@ async function notifyProgress(requestId: string, itemId: string, kind: 'PREPARIN
   await notify([ctx.requesterId], { kind, ...m, url: statusUrl(requestId), tag: `${kind}:${itemId}` }, { dedupeKey: (u) => `${kind}:${itemId}:${u}` });
 }
 
+/** The requester gets the request's status page; every other guardian gets /parent (they cannot open someone else's request). */
+async function notifyParties(requestId: string, requesterId: string, others: string[], p: Omit<NotificationPayload, 'url'>): Promise<void> {
+  await notify([requesterId], { ...p, url: statusUrl(requestId) });
+  const rest = others.filter((id) => id !== requesterId);
+  if (rest.length) await notify(rest, { ...p, url: '/parent' });
+}
+
 async function notifyDelivered(requestId: string, itemIds: string[], at: Date): Promise<void> {
   const ctx = await loadNotifyCtx(requestId);
   if (!ctx) return;
   const items = ctx.items.filter((i) => itemIds.includes(i.id));
   const m = msgDelivered({ names: items.map((i) => i.name), time: formatRiyadhTime(at), gate: ctx.gate });
   const others = await linkedGuardianIds(items.map((i) => i.studentId));
-  await notify([ctx.requesterId, ...others], { kind: 'DELIVERED', ...m, url: statusUrl(requestId), tag: `DELIVERED:${requestId}` });
+  await notifyParties(requestId, ctx.requesterId, others, { kind: 'DELIVERED', ...m, tag: `DELIVERED:${requestId}` });
 }
 
 /** Names only the items cancelled by this action (N5), and this action's reason. */
@@ -112,7 +119,7 @@ async function notifyCancelled(requestId: string, itemIds: string[], reason: str
   if (!ctx) return;
   const cancelled = ctx.items.filter((i) => itemIds.includes(i.id));
   const others = await linkedGuardianIds(cancelled.map((i) => i.studentId));
-  await notify([ctx.requesterId, ...others], { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason }), url: statusUrl(requestId), tag: `CANCELLED:${requestId}` });
+  await notifyParties(requestId, ctx.requesterId, others, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason }), tag: `CANCELLED:${requestId}` });
 }
 
 export const REVOKED_REASON = 'أُلغي من المدرسة: تغيّرت صلاحية الاستلام';
@@ -176,10 +183,9 @@ export async function revokeUnlinkedItems(tx: Tx, studentIds: string[], actorId:
 }
 
 /**
- * After commit: tell the guardians still linked to the revoked students, and live views, about revocations.
- * Batches are merged per request (one notice per request, even when several students were revoked in separate
- * transactions). A requester who lost the link is not notified; one who is still linked is.
- * Stale auto-closes send nothing.
+ * After commit: tell live views, the requester (always, linked or not) and the guardians still linked to the
+ * revoked students about revocations. Batches are merged per request (one notice per request, even when several
+ * students were revoked in separate transactions). Stale auto-closes send nothing.
  */
 export async function announceRevoked(batches: RevokedBatch[]): Promise<void> {
   const merged = new Map<string, Set<string>>();
@@ -193,9 +199,8 @@ export async function announceRevoked(batches: RevokedBatch[]): Promise<void> {
     safely(async () => {
       const ctx = await loadNotifyCtx(requestId);
       if (!ctx) return;
-      const recipients = await linkedGuardianIds([...studentIds]);
-      if (recipients.length === 0) return;
-      await notify(recipients, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason: REVOKED_REASON }), url: statusUrl(requestId), tag: `CANCELLED:${requestId}` });
+      const others = await linkedGuardianIds([...studentIds]);
+      await notifyParties(requestId, ctx.requesterId, others, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason: REVOKED_REASON }), tag: `CANCELLED:${requestId}` });
     });
   }
 }

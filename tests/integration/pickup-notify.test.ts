@@ -101,6 +101,7 @@ describe('pickup status notifications', () => {
       expect(r).toHaveLength(1);
       expect(r[0].title).toMatch(/^تم تسليم /);
       expect(r[0].body).toBe('الساعة 12:34 · بوابة 1');
+      expect(r[0].url).toBe(u === g1 ? `/parent/request/${req.id}` : '/parent');
     }
     expect(await rows(other.id)).toHaveLength(0);
   });
@@ -180,6 +181,7 @@ describe('pickup status notifications', () => {
       expect(r).toHaveLength(1);
       expect(r[0].body).toBe('تعذر الاستلام');
       expect(r[0].title).toBe(`أُلغي طلب الاستلام ${req.number}`);
+      expect(r[0].url).toBe(u === g1 ? `/parent/request/${req.id}` : '/parent');
     }
     expect(await rows(other.id)).toHaveLength(0);
   });
@@ -190,15 +192,17 @@ describe('pickup status notifications', () => {
     expect(await prisma.notification.count({ where: { userId: { in: [g1.id, g2.id] } } })).toBe(0);
   });
 
-  it('revocation: other guardian gets exactly one notice, revoked requester none', async () => {
+  it('revocation: the revoked requester is told (status link); the other guardian gets /parent', async () => {
     const { s, a, b, req, g1, g2, other } = await setup();
-    // g1 (requester) loses the link to both students at once; g2 stays linked.
+    // g1 (requester) loses the link to both students, in two actions; g2 stays linked.
     await updateStudent(s.admin, { id: a.id, phones: [P2] });
     await updateStudent(s.admin, { id: b.id, phones: [P2] });
-    expect(await rows(g1.id)).toHaveLength(0);
+    const mine = await rows(g1.id, 'CANCELLED');
+    expect(mine).toHaveLength(2); // one per revoking action
+    expect(mine.every((x) => x.title === `أُلغي طلب الاستلام ${req.number}` && x.url === `/parent/request/${req.id}`)).toBe(true);
     const r = await rows(g2.id, 'CANCELLED');
-    expect(r).toHaveLength(2); // one per revoking action, each naming only that action's items
-    expect(r.every((x) => x.title === `أُلغي طلب الاستلام ${req.number}`)).toBe(true);
+    expect(r).toHaveLength(2);
+    expect(r.every((x) => x.title === `أُلغي طلب الاستلام ${req.number}` && x.url === '/parent')).toBe(true);
     expect(await rows(other.id)).toHaveLength(0);
   });
 
@@ -208,15 +212,16 @@ describe('pickup status notifications', () => {
     const r = await rows(g1.id, 'CANCELLED');
     expect(r).toHaveLength(1);
     expect(r[0].title).toBe(`أُلغي طلب الاستلام ${req.number}`);
+    expect(r[0].url).toBe(`/parent/request/${req.id}`);
     expect(await rows(g2.id, 'CANCELLED')).toHaveLength(1);
   });
 
-  it('import: two sibling rows of one request both lose the requester; each remaining guardian gets exactly one notice', async () => {
+  it('import: two sibling rows of one request both lose the requester; requester and each remaining guardian get exactly one notice', async () => {
     const { s, req, g1, g2, other } = await setup();
     await applyImport(s.admin, s.school.id, ['أحمد علي', 'بدر سعد'].map((n, i) => ({
       branch: s.branch.name, externalId: `${i}`, fullName: n, classroom: '1/أ', gate: 'بوابة 1', phones: [P2],
     })));
-    expect(await rows(g1.id)).toHaveLength(0);
+    expect(await rows(g1.id, 'CANCELLED')).toHaveLength(1);
     const r = await rows(g2.id, 'CANCELLED');
     expect(r).toHaveLength(1);
     expect(r[0].title).toBe(`أُلغي طلب الاستلام ${req.number}`);
