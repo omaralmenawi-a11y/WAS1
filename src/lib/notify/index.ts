@@ -72,6 +72,3 @@ export async function notify(
   }
   return { created, pushed };
 }
-
-/** Bridge (ruling N1): Task 3 replaces the pickup service's calls with real notifications. */
-export async function notifyPickupEvent(_userIds: string[], _event: string, _data: object): Promise<void> {}

@@ -30,3 +30,9 @@ export function riyadhDay(d: Date): RiyadhDay {
     minutes: Number(p.hour) * 60 + Number(p.minute),
   };
 }
+
+/** HH:MM in Asia/Riyadh. */
+export function formatRiyadhTime(at: Date): string {
+  const m = riyadhDay(at).minutes;
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}

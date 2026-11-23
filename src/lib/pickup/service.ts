@@ -6,10 +6,12 @@ import { writeAudit } from '../audit';
 import { assertBranchAccess } from '../authz';
 import { Conflict, Forbidden, NotFound, RateLimitError, ValidationError } from '../errors';
 import { buildScheduleCtxs, listChildrenForUser, SCHEDULE_INCLUDE } from '../guardian/children';
-import { notifyPickupEvent } from '../notify';
+import { notify } from '../notify';
+import { msgCancelled, msgDelivered, msgPreparing, msgReady } from '../notify/messages';
+import { linkedGuardianIds } from '../notify/recipients';
 import { emitPickupChanged } from '../realtime';
 import { canRequestNow } from '../schedule';
-import { now, riyadhDay } from '../time';
+import { formatRiyadhTime, now, riyadhDay } from '../time';
 import { checkPickupCode, parseQr } from './code';
 import { etaSeconds, haversineMeters } from './eta';
 import { nextStatus } from './state';
@@ -60,6 +62,61 @@ async function closeIfDone(tx: Tx, requestId: string, at: Date): Promise<boolean
     data: { open: false, closedAt: at, lat: null, lng: null, locationAt: null, etaSeconds: null },
   });
   return true;
+}
+
+const firstName = (full: string) => full.trim().split(/\s+/)[0] ?? full;
+const statusUrl = (requestId: string) => `/parent/request/${requestId}`;
+
+/** Request number, gate name and items (with student first names) for message building (PickupRequest has no gate relation, so the gate is a second lookup). */
+async function loadNotifyCtx(requestId: string) {
+  const r = await prisma.pickupRequest.findUnique({
+    where: { id: requestId },
+    select: {
+      number: true,
+      requesterId: true,
+      gateId: true,
+      items: { select: { id: true, status: true, studentId: true, cancelReason: true, student: { select: { fullName: true } } }, orderBy: { id: 'asc' } },
+    },
+  });
+  if (!r) return null;
+  const gate = await prisma.gate.findUnique({ where: { id: r.gateId }, select: { name: true } });
+  return { number: r.number, requesterId: r.requesterId, gate: gate?.name ?? '', items: r.items.map((i) => ({ ...i, name: firstName(i.student.fullName) })) };
+}
+
+/** Post-commit, never throws: a notification problem must not fail the mutation. */
+async function safely(fn: () => Promise<unknown>): Promise<void> {
+  try {
+    await fn();
+  } catch (e) {
+    console.error('pickup notification failed', e);
+  }
+}
+
+async function notifyProgress(requestId: string, kind: 'PREPARING' | 'READY'): Promise<void> {
+  const ctx = await loadNotifyCtx(requestId);
+  if (!ctx) return;
+  const items = ctx.items.filter((i) => i.status !== 'CANCELLED' && i.status !== 'DELIVERED');
+  if (items.length === 0) return;
+  const args = { names: items.map((i) => i.name), number: ctx.number, gate: ctx.gate };
+  const m = kind === 'PREPARING' ? msgPreparing(args) : msgReady(args);
+  await notify([ctx.requesterId], { kind, ...m, url: statusUrl(requestId) }, { dedupeKey: (u) => `${kind}:${requestId}:${u}` });
+}
+
+async function notifyDelivered(requestId: string, itemIds: string[], at: Date): Promise<void> {
+  const ctx = await loadNotifyCtx(requestId);
+  if (!ctx) return;
+  const items = ctx.items.filter((i) => itemIds.includes(i.id));
+  const m = msgDelivered({ names: items.map((i) => i.name), time: formatRiyadhTime(at), gate: ctx.gate });
+  const others = await linkedGuardianIds(items.map((i) => i.studentId));
+  await notify([ctx.requesterId, ...others], { kind: 'DELIVERED', ...m, url: statusUrl(requestId) });
+}
+
+async function notifyCancelled(requestId: string, reason: string | null): Promise<void> {
+  const ctx = await loadNotifyCtx(requestId);
+  if (!ctx) return;
+  const cancelled = ctx.items.filter((i) => i.status === 'CANCELLED');
+  const others = await linkedGuardianIds(cancelled.map((i) => i.studentId));
+  await notify([ctx.requesterId, ...others], { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason }), url: statusUrl(requestId) });
 }
 
 export const REVOKED_REASON = 'أُلغي من المدرسة: تغيّرت صلاحية الاستلام';
@@ -114,11 +171,20 @@ export async function revokeUnlinkedItems(tx: Tx, studentIds: string[], actorId:
   return touched;
 }
 
-/** After commit: tell requesters and live views about revocations. */
+/**
+ * After commit: tell the guardians who are still linked, and live views, about revocations.
+ * The revoked requester is not notified (they lost access); stale auto-closes send nothing.
+ */
 export async function announceRevoked(requestIds: string[]): Promise<void> {
   for (const requestId of requestIds) {
-    const r = await prisma.pickupRequest.findUnique({ where: { id: requestId }, select: { requesterId: true } });
-    if (r) await notifyPickupEvent([r.requesterId], 'PICKUP_CANCELLED', { requestId });
+    await safely(async () => {
+      const ctx = await loadNotifyCtx(requestId);
+      if (!ctx) return;
+      const revoked = ctx.items.filter((i) => i.status === 'CANCELLED' && i.cancelReason === REVOKED_REASON);
+      const remaining = (await linkedGuardianIds(revoked.map((i) => i.studentId))).filter((u) => u !== ctx.requesterId);
+      if (remaining.length === 0) return;
+      await notify(remaining, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason: REVOKED_REASON }), url: statusUrl(requestId) });
+    });
     await emitPickupChanged(requestId);
   }
 }
@@ -246,7 +312,7 @@ export async function advanceItem(staff: User, itemId: string, action: 'PREPARE'
     );
     return tx.pickupItem.findUniqueOrThrow({ where: { id: itemId } });
   });
-  if (to === 'READY') await notifyPickupEvent([item.request.requesterId], 'ITEM_READY', { requestId: item.requestId, itemId });
+  if (to === 'PREPARING' || to === 'READY') await safely(() => notifyProgress(item.requestId, to));
   await emitPickupChanged(item.requestId);
   return updated;
 }
@@ -399,7 +465,7 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
   });
   if (revoked) await announceRevoked([requestId]);
   if (!delivered) throw new Conflict(NOT_AUTHORISED);
-  await notifyPickupEvent([req.requesterId], 'ITEM_DELIVERED', { requestId, itemIds: ids });
+  await safely(() => notifyDelivered(requestId, ids, at));
   await emitPickupChanged(requestId);
 }
 
@@ -428,7 +494,7 @@ export async function cancelRequest(actor: User, requestId: string, reasonAr?: s
       tx,
     );
   });
-  await notifyPickupEvent([req.requesterId], 'PICKUP_CANCELLED', { requestId });
+  await safely(() => notifyCancelled(requestId, reason));
   await emitPickupChanged(requestId);
 }
 
