@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as recipients from '../../src/lib/notify/recipients';
+import { setStudentActive } from '../../src/lib/school/students';
 import { prisma } from '../../src/lib/db';
 import { createSchoolWithAdmin } from '../../src/lib/admin/schools';
 import { createClassroom, createGate, setClassSchedule } from '../../src/lib/school/setup';
@@ -53,26 +55,32 @@ describe('linkedGuardianIds', () => {
 });
 
 describe('pickup status notifications', () => {
-  it('PREPARING once per request even when siblings advance separately', async () => {
+  it('PREPARING is per item: each sibling gets its own message naming only that child', async () => {
     const { req, staff, g1, g2 } = await setup();
     const [i1, i2] = req.items;
     await advanceItem(staff, i1.id, 'PREPARE', plus(T, 1));
     await advanceItem(staff, i2.id, 'PREPARE', plus(T, 1));
     const r = await rows(g1.id, 'PREPARING');
-    expect(r).toHaveLength(1);
-    expect(r[0].title).toContain('جاري تجهيز');
+    expect(r).toHaveLength(2);
+    expect(r.every((x) => x.title.split(' و ').length === 1 && x.title.startsWith('جاري تجهيز '))).toBe(true);
     expect(r[0].body).toBe(`الطلب ${req.number} · بوابة 1`);
     expect(r[0].url).toBe(`/parent/request/${req.id}`);
     expect(await rows(g2.id)).toHaveLength(0); // requester only
   });
 
-  it('READY once per request', async () => {
+  it('READY names only the ready child; the sibling gets its own message later', async () => {
     const { req, staff, g1 } = await setup();
-    for (const i of req.items) await advanceItem(staff, i.id, 'PREPARE', plus(T, 1));
-    for (const i of req.items) await advanceItem(staff, i.id, 'READY', plus(T, 2));
-    const r = await rows(g1.id, 'READY');
+    const [i1, i2] = req.items;
+    await advanceItem(staff, i1.id, 'PREPARE', plus(T, 1));
+    await advanceItem(staff, i2.id, 'PREPARE', plus(T, 1));
+    await advanceItem(staff, i1.id, 'READY', plus(T, 2));
+    let r = await rows(g1.id, 'READY');
     expect(r).toHaveLength(1);
-    expect(r[0].title).toContain('جاهز');
+    expect(r[0].title).toMatch(/^[^ ]+ جاهز للاستلام$/);
+    await advanceItem(staff, i2.id, 'READY', plus(T, 3));
+    r = await rows(g1.id, 'READY');
+    expect(r).toHaveLength(2);
+    expect(new Set(r.map((x) => x.title)).size).toBe(2);
   });
 
   it('deliver notifies requester and other linked guardian, not unrelated', async () => {
@@ -88,6 +96,21 @@ describe('pickup status notifications', () => {
       expect(r[0].body).toBe('الساعة 12:34 · بوابة 1');
     }
     expect(await rows(other.id)).toHaveLength(0);
+  });
+
+  it('a throwing notification path does not fail deliverItems', async () => {
+    const { req, staff } = await setup();
+    for (const i of req.items) await advanceItem(staff, i.id, 'PREPARE', plus(T, 1));
+    for (const i of req.items) await advanceItem(staff, i.id, 'READY', plus(T, 2));
+    await verifyRecipient(staff, { requestNumber: req.number, code: pickupCode(req.id, plus(T, 3)) }, plus(T, 3));
+    const spy = vi.spyOn(recipients, 'linkedGuardianIds').mockRejectedValue(new Error('boom'));
+    try {
+      await expect(deliverItems(staff, req.id, req.items.map((i) => i.id), plus(T, 4))).resolves.toBeUndefined();
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await prisma.pickupItem.count({ where: { requestId: req.id, status: 'DELIVERED' } })).toBe(2);
   });
 
   it('a failing push sender does not fail deliverItems', async () => {
@@ -119,15 +142,24 @@ describe('pickup status notifications', () => {
     expect(await prisma.notification.count({ where: { userId: { in: [g1.id, g2.id] } } })).toBe(0);
   });
 
-  it('revocation cancel notifies remaining guardians, not the revoked one', async () => {
-    const { s, a, req, g1, g2, other } = await setup();
-    // g1 (requester) loses the link to both students; g2 stays linked.
-    for (const st of [a.id, req.items.find((i) => i.studentId !== a.id)!.studentId]) {
-      await updateStudent(s.admin, { id: st, phones: [P2] });
-    }
+  it('revocation: other guardian gets exactly one notice, revoked requester none', async () => {
+    const { s, a, b, req, g1, g2, other } = await setup();
+    // g1 (requester) loses the link to both students at once; g2 stays linked.
+    await updateStudent(s.admin, { id: a.id, phones: [P2] });
+    await updateStudent(s.admin, { id: b.id, phones: [P2] });
     expect(await rows(g1.id)).toHaveLength(0);
     const r = await rows(g2.id, 'CANCELLED');
-    expect(r.length).toBeGreaterThanOrEqual(1);
+    expect(r).toHaveLength(2); // one per revoking action, each naming only that action's items
+    expect(r.every((x) => x.title === `أُلغي طلب الاستلام ${req.number}`)).toBe(true);
     expect(await rows(other.id)).toHaveLength(0);
+  });
+
+  it('revocation: a requester who is still linked is notified', async () => {
+    const { s, a, req, g1, g2 } = await setup();
+    await setStudentActive(s.admin, { id: a.id, active: false });
+    const r = await rows(g1.id, 'CANCELLED');
+    expect(r).toHaveLength(1);
+    expect(r[0].title).toBe(`أُلغي طلب الاستلام ${req.number}`);
+    expect(await rows(g2.id, 'CANCELLED')).toHaveLength(1);
   });
 });

@@ -92,14 +92,15 @@ async function safely(fn: () => Promise<unknown>): Promise<void> {
   }
 }
 
-async function notifyProgress(requestId: string, kind: 'PREPARING' | 'READY'): Promise<void> {
+/** PREPARING / READY are per item: each names only the child of the item just advanced (N4). */
+async function notifyProgress(requestId: string, itemId: string, kind: 'PREPARING' | 'READY'): Promise<void> {
   const ctx = await loadNotifyCtx(requestId);
   if (!ctx) return;
-  const items = ctx.items.filter((i) => i.status !== 'CANCELLED' && i.status !== 'DELIVERED');
-  if (items.length === 0) return;
-  const args = { names: items.map((i) => i.name), number: ctx.number, gate: ctx.gate };
+  const item = ctx.items.find((i) => i.id === itemId);
+  if (!item) return;
+  const args = { names: [item.name], number: ctx.number, gate: ctx.gate };
   const m = kind === 'PREPARING' ? msgPreparing(args) : msgReady(args);
-  await notify([ctx.requesterId], { kind, ...m, url: statusUrl(requestId) }, { dedupeKey: (u) => `${kind}:${requestId}:${u}` });
+  await notify([ctx.requesterId], { kind, ...m, url: statusUrl(requestId) }, { dedupeKey: (u) => `${kind}:${itemId}:${u}` });
 }
 
 async function notifyDelivered(requestId: string, itemIds: string[], at: Date): Promise<void> {
@@ -111,10 +112,11 @@ async function notifyDelivered(requestId: string, itemIds: string[], at: Date): 
   await notify([ctx.requesterId, ...others], { kind: 'DELIVERED', ...m, url: statusUrl(requestId) });
 }
 
-async function notifyCancelled(requestId: string, reason: string | null): Promise<void> {
+/** Names only the items cancelled by this action (N5), and this action's reason. */
+async function notifyCancelled(requestId: string, itemIds: string[], reason: string | null): Promise<void> {
   const ctx = await loadNotifyCtx(requestId);
   if (!ctx) return;
-  const cancelled = ctx.items.filter((i) => i.status === 'CANCELLED');
+  const cancelled = ctx.items.filter((i) => itemIds.includes(i.id));
   const others = await linkedGuardianIds(cancelled.map((i) => i.studentId));
   await notify([ctx.requesterId, ...others], { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason }), url: statusUrl(requestId) });
 }
@@ -172,18 +174,25 @@ export async function revokeUnlinkedItems(tx: Tx, studentIds: string[], actorId:
 }
 
 /**
- * After commit: tell the guardians who are still linked, and live views, about revocations.
- * The revoked requester is not notified (they lost access); stale auto-closes send nothing.
+ * After commit: tell the guardians still linked to the revoked students, and live views, about revocations.
+ * Only the items revoked by this action are considered (the latest revocation batch of the request, which
+ * shares one cancelledAt). A requester who lost the link is not notified; one who is still linked is.
+ * Stale auto-closes send nothing.
  */
 export async function announceRevoked(requestIds: string[]): Promise<void> {
   for (const requestId of requestIds) {
     await safely(async () => {
       const ctx = await loadNotifyCtx(requestId);
       if (!ctx) return;
-      const revoked = ctx.items.filter((i) => i.status === 'CANCELLED' && i.cancelReason === REVOKED_REASON);
-      const remaining = (await linkedGuardianIds(revoked.map((i) => i.studentId))).filter((u) => u !== ctx.requesterId);
-      if (remaining.length === 0) return;
-      await notify(remaining, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason: REVOKED_REASON }), url: statusUrl(requestId) });
+      const revoked = await prisma.pickupItem.findMany({
+        where: { requestId, status: 'CANCELLED', cancelReason: REVOKED_REASON },
+        select: { id: true, studentId: true, cancelledAt: true },
+      });
+      const latest = Math.max(0, ...revoked.map((i) => i.cancelledAt?.getTime() ?? 0));
+      const batch = revoked.filter((i) => (i.cancelledAt?.getTime() ?? 0) === latest);
+      const recipients = await linkedGuardianIds(batch.map((i) => i.studentId));
+      if (recipients.length === 0) return;
+      await notify(recipients, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason: REVOKED_REASON }), url: statusUrl(requestId) });
     });
     await emitPickupChanged(requestId);
   }
@@ -312,7 +321,7 @@ export async function advanceItem(staff: User, itemId: string, action: 'PREPARE'
     );
     return tx.pickupItem.findUniqueOrThrow({ where: { id: itemId } });
   });
-  if (to === 'PREPARING' || to === 'READY') await safely(() => notifyProgress(item.requestId, to));
+  if (to === 'PREPARING' || to === 'READY') await safely(() => notifyProgress(item.requestId, itemId, to));
   await emitPickupChanged(item.requestId);
   return updated;
 }
@@ -481,8 +490,10 @@ export async function cancelRequest(actor: User, requestId: string, reasonAr?: s
     if (!reason) throw new ValidationError('سبب الإلغاء مطلوب');
   }
 
+  let cancelledIds: string[] = [];
   await prisma.$transaction(async (tx) => {
     await lockRequest(tx, requestId);
+    cancelledIds = (await tx.pickupItem.findMany({ where: { requestId, status: { in: ACTIVE } }, select: { id: true } })).map((i) => i.id);
     const res = await tx.pickupItem.updateMany({
       where: { requestId, status: { in: ACTIVE } },
       data: { status: 'CANCELLED', cancelledAt: at, cancelReason: reason },
@@ -494,7 +505,7 @@ export async function cancelRequest(actor: User, requestId: string, reasonAr?: s
       tx,
     );
   });
-  await safely(() => notifyCancelled(requestId, reason));
+  await safely(() => notifyCancelled(requestId, cancelledIds, reason));
   await emitPickupChanged(requestId);
 }
 
