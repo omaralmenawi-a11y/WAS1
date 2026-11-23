@@ -3,7 +3,7 @@ import { prisma } from '../db';
 import { Conflict, InvalidCredentials, RateLimitError, ValidationError } from '../errors';
 import { normalizePhone } from '../phone';
 import { now } from '../time';
-import { parseIdentifier } from './identifier';
+import { normalizeUsername, parseIdentifier } from './identifier';
 import { verifyOtp } from './otp';
 import { hashPassword, verifyPassword } from './password';
 
@@ -57,7 +57,7 @@ async function findForLogin(raw: string): Promise<User | null> {
     const u = await prisma.user.findUnique({ where: { phone } });
     if (u) return u;
   }
-  return prisma.user.findUnique({ where: { username: s } });
+  return prisma.user.findUnique({ where: { username: normalizeUsername(s) } });
 }
 
 const MAX_FAILED_LOGINS = 10;
@@ -67,7 +67,7 @@ let dummyHash: Promise<string> | undefined;
 function loginKey(raw: string): string {
   const s = raw.trim();
   if (s.includes('@')) return s.toLowerCase();
-  return normalizePhone(s) ?? s;
+  return normalizePhone(s) ?? normalizeUsername(s);
 }
 
 export async function login(input: { identifier: string; password: string }): Promise<User> {

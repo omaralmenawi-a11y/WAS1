@@ -4,6 +4,7 @@ import { createSession } from '../../src/lib/auth/session';
 import { hashPassword } from '../../src/lib/auth/password';
 import { assertBranchAccess, assertSchoolAccess, requireRole, requireUser } from '../../src/lib/authz';
 import { createSchoolWithAdmin } from '../../src/lib/admin/schools';
+import { login } from '../../src/lib/auth/accounts';
 import { Conflict, Forbidden, NotFound, Unauthorized } from '../../src/lib/errors';
 
 async function mkSchool(tag: string) {
@@ -70,5 +71,14 @@ describe('authz', () => {
     await expect(requireUser(new Request('http://x/'))).rejects.toThrow(Unauthorized);
     expect(() => requireRole(a.admin, 'PLATFORM_ADMIN')).toThrow(Forbidden);
     expect(() => requireRole(a.admin, 'SCHOOL_ADMIN', 'STAFF')).not.toThrow();
+  });
+
+  it('username login is case-insensitive', async () => {
+    const r = await createSchoolWithAdmin({
+      schoolName: 'م', branchName: 'ف', adminName: 'م', adminUsername: 'Admin', tempPassword: 'temp-pass-123',
+    });
+    expect(r.admin.username).toBe('admin');
+    expect((await login({ identifier: 'ADMIN', password: 'temp-pass-123' })).id).toBe(r.admin.id);
+    expect((await login({ identifier: 'admin', password: 'temp-pass-123' })).id).toBe(r.admin.id);
   });
 });

@@ -15,3 +15,8 @@ export function parseIdentifier(input: string): Identifier {
   if (!phone) throw new ValidationError('رقم الجوال أو البريد الإلكتروني غير صالح');
   return { kind: 'phone', value: phone };
 }
+
+/** Single place usernames are normalised (creation and login lookup). */
+export function normalizeUsername(s: string): string {
+  return s.trim().toLowerCase();
+}

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { normalizeUsername } from '../auth/identifier';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { Conflict, ValidationError } from '../errors';
@@ -18,7 +19,7 @@ export async function createSchoolWithAdmin(i: CreateSchoolInput) {
   const schoolName = i.schoolName?.trim();
   const branchName = i.branchName?.trim();
   const adminName = i.adminName?.trim();
-  const adminUsername = i.adminUsername?.trim().toLowerCase();
+  const adminUsername = normalizeUsername(i.adminUsername ?? '');
   if (!schoolName || !branchName || !adminName || !adminUsername) throw new ValidationError('جميع الحقول مطلوبة');
   if ((i.tempPassword ?? '').length < 8) throw new ValidationError('كلمة المرور المؤقتة يجب ألا تقل عن ٨ أحرف');
 
@@ -64,7 +65,7 @@ export async function createSchoolWithAdmin(i: CreateSchoolInput) {
 }
 
 export async function createPlatformAdmin(username: string, password: string) {
-  const u = username?.trim().toLowerCase();
+  const u = normalizeUsername(username ?? '');
   if (!u) throw new ValidationError('اسم المستخدم مطلوب');
   if ((password ?? '').length < 8) throw new ValidationError('كلمة المرور يجب ألا تقل عن ٨ أحرف');
   if (await prisma.user.findUnique({ where: { username: u } })) throw new Conflict('اسم المستخدم مستخدم مسبقاً');
