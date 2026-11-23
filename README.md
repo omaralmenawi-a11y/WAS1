@@ -14,7 +14,7 @@ service postgresql start
 
 # إنشاء المستخدم وقواعد البيانات (مرة واحدة)
 sudo -u postgres psql <<'SQL'
-CREATE ROLE wasl LOGIN SUPERUSER PASSWORD 'wasl';
+CREATE ROLE wasl LOGIN SUPERUSER PASSWORD 'wasl';  -- للتطوير فقط / dev only
 CREATE DATABASE wasl_dev OWNER wasl;
 CREATE DATABASE wasl_test OWNER wasl;
 CREATE DATABASE wasl_e2e OWNER wasl;
@@ -55,7 +55,7 @@ npm run e2e -- --trace off    # رحلة الاستلام كاملة (متصفح
 npm run smoke                 # تشغيل الخادم في وضع التطوير والإنتاج
 ```
 
-يضبط اختبار e2e الوقت عبر `WASL_FAKE_NOW` (يوم أحد 12:00 بتوقيت الرياض) وساعة المتصفح. إن كان Chromium في مسار آخر فاستخدم `PW_CHROMIUM_PATH`.
+يضبط اختبار e2e الوقت عبر `WASL_FAKE_NOW` (يوم أحد 12:00 بتوقيت الرياض) وساعة المتصفح. على جهاز عادي شغّل مرة واحدة `npx playwright install chromium`؛ وإن كان Chromium مثبتاً في مسار آخر فاستخدم `PW_CHROMIUM_PATH`.
 
 - البناء: `npm run build` ثم `npm start` (يضبط `NODE_ENV=production`؛ لا يعمل `WASL_FAKE_NOW` في هذا الوضع).
 - فحص الخادم (smoke): يشغّل `server.ts` في وضع التطوير ثم يبني ويشغّل `dist/server.js` في وضع الإنتاج ويتوقع 200 من `/login`. شغّله بعد أي تغيير في `server.ts` أو وحدات المقبس (`src/lib/realtime.ts` وما تستورده)، فهذه يجب ألا تستورد `next/headers` أو `next/navigation`.
@@ -85,7 +85,7 @@ Node.js 22 and PostgreSQL 16.
 ```bash
 service postgresql start
 sudo -u postgres psql <<'SQL'
-CREATE ROLE wasl LOGIN SUPERUSER PASSWORD 'wasl';
+CREATE ROLE wasl LOGIN SUPERUSER PASSWORD 'wasl';  -- dev only
 CREATE DATABASE wasl_dev OWNER wasl;
 CREATE DATABASE wasl_test OWNER wasl;
 CREATE DATABASE wasl_e2e OWNER wasl;
@@ -116,7 +116,7 @@ npm run e2e -- --trace off    # full pickup journey (Chromium, wasl_e2e)
 npm run smoke                 # boots dev and production servers
 ```
 
-The e2e run fixes the server clock with `WASL_FAKE_NOW` (next Sunday 12:00 Riyadh) and the browser clock to match. Set `PW_CHROMIUM_PATH` if Chromium lives elsewhere. `npm start` sets `NODE_ENV=production` (fake time is ignored there). Run `npm run smoke` after touching `server.ts` or the socket modules (`src/lib/realtime.ts` and its imports must not import `next/headers` or `next/navigation`).
+The e2e run fixes the server clock with `WASL_FAKE_NOW` (next Sunday 12:00 Riyadh) and the browser clock to match. On a normal machine run `npx playwright install chromium` once; set `PW_CHROMIUM_PATH` if Chromium is installed elsewhere. `npm start` sets `NODE_ENV=production` (fake time is ignored there). Run `npm run smoke` after touching `server.ts` or the socket modules (`src/lib/realtime.ts` and its imports must not import `next/headers` or `next/navigation`).
 
 ## Phase 2
 

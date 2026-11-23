@@ -37,7 +37,8 @@ export default defineConfig({
     baseURL: `http://localhost:${PORT}`,
     locale: 'ar-SA',
     trace: 'off',
-    launchOptions: { executablePath: process.env.PW_CHROMIUM_PATH ?? '/opt/pw-browsers/chromium' },
+    // Only override the browser when PW_CHROMIUM_PATH is set (e.g. sandbox); otherwise use Playwright's own Chromium.
+    ...(process.env.PW_CHROMIUM_PATH ? { launchOptions: { executablePath: process.env.PW_CHROMIUM_PATH } } : {}),
   },
   webServer: {
     command: 'bash e2e/start-server.sh',
