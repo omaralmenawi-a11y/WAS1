@@ -5,6 +5,7 @@ import { writeAudit } from '../audit';
 import { assertSchoolAccess } from '../authz';
 import { ValidationError } from '../errors';
 import { normalizePhone } from '../phone';
+import { announceRevoked, revokeUnlinkedItems } from '../pickup/service';
 import { requireManager } from './setup';
 
 export type ImportRow = { externalId: string; fullName: string; branch: string; classroom: string; gate: string; phones: string[] };
@@ -145,6 +146,7 @@ export async function applyImport(
   const errors: RowMessage[] = [];
   let created = 0;
   let updated = 0;
+  const revoked: string[] = []; // requests whose requester lost the link to a child (announced after all rows)
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
@@ -185,6 +187,7 @@ export async function applyImport(
           : await tx.student.create({ data: { ...data, schoolId, externalId } });
         await tx.guardianPhone.deleteMany({ where: { studentId: s.id } });
         if (uniquePhones.length) await tx.guardianPhone.createMany({ data: uniquePhones.map((phone) => ({ studentId: s.id, phone })) });
+        if (existing) revoked.push(...(await revokeUnlinkedItems(tx, [s.id], actor.id)));
         return !existing;
       });
       if (isNew) created++;
@@ -194,6 +197,7 @@ export async function applyImport(
     }
   }
 
+  await announceRevoked(revoked);
   await writeAudit({
     schoolId,
     actorId: actor.id,

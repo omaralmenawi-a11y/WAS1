@@ -62,6 +62,67 @@ async function closeIfDone(tx: Tx, requestId: string, at: Date): Promise<boolean
   return true;
 }
 
+export const REVOKED_REASON = 'أُلغي من المدرسة: تغيّرت صلاحية الاستلام';
+const NOT_AUTHORISED = 'لم يعد المستلم مخوّلاً باستلام هذا الطالب';
+
+/** Active items of a (locked) request whose student is inactive or no longer linked to the requester's phone. */
+async function unlinkedItemIds(tx: Tx, req: PickupRequest): Promise<string[]> {
+  const [requester, items] = await Promise.all([
+    tx.user.findUnique({ where: { id: req.requesterId }, select: { phone: true } }),
+    tx.pickupItem.findMany({
+      where: { requestId: req.id, status: { in: ACTIVE } },
+      select: { id: true, student: { select: { active: true, phones: { select: { phone: true } } } } },
+    }),
+  ]);
+  const phone = requester?.phone;
+  return items.filter((i) => !i.student.active || !phone || !i.student.phones.some((p) => p.phone === phone)).map((i) => i.id);
+}
+
+/** Cancels revoked items of a locked request, closes it when nothing is left, audits. */
+async function cancelRevoked(tx: Tx, req: PickupRequest, itemIds: string[], actorId: string | null, at: Date): Promise<void> {
+  await tx.pickupItem.updateMany({
+    where: { id: { in: itemIds }, requestId: req.id, status: { in: ACTIVE } },
+    data: { status: 'CANCELLED', cancelledAt: at, cancelReason: REVOKED_REASON },
+  });
+  await closeIfDone(tx, req.id, at);
+  await writeAudit(
+    { schoolId: req.schoolId, actorId, action: 'PICKUP_CANCELLED', entity: 'PickupRequest', entityId: req.id, data: { reason: REVOKED_REASON, cancelled: itemIds.length, itemIds, branchId: req.branchId } },
+    tx,
+  );
+}
+
+/**
+ * Call inside the transaction that changed students' phones or active flag: cancels their active items
+ * whose requester is no longer linked. Returns the touched request ids; pass them to announceRevoked after commit.
+ */
+export async function revokeUnlinkedItems(tx: Tx, studentIds: string[], actorId: string | null, at: Date = now()): Promise<string[]> {
+  if (studentIds.length === 0) return [];
+  const rows = await tx.pickupItem.findMany({
+    where: { studentId: { in: studentIds }, status: { in: ACTIVE } },
+    select: { requestId: true },
+    distinct: ['requestId'],
+    orderBy: { requestId: 'asc' },
+  });
+  const touched: string[] = [];
+  for (const { requestId } of rows) {
+    const req = await lockRequest(tx, requestId);
+    const ids = await unlinkedItemIds(tx, req);
+    if (ids.length === 0) continue;
+    await cancelRevoked(tx, req, ids, actorId, at);
+    touched.push(requestId);
+  }
+  return touched;
+}
+
+/** After commit: tell requesters and live views about revocations. */
+export async function announceRevoked(requestIds: string[]): Promise<void> {
+  for (const requestId of requestIds) {
+    const r = await prisma.pickupRequest.findUnique({ where: { id: requestId }, select: { requesterId: true } });
+    if (r) await notify([r.requesterId], 'PICKUP_CANCELLED', { requestId });
+    await emitPickupChanged(requestId);
+  }
+}
+
 export async function createRequest(user: User, studentIds: string[], at: Date = now()) {
   if (user.role !== 'GUARDIAN') throw new Forbidden();
   const ids = [...new Set(studentIds)];
@@ -242,9 +303,18 @@ export async function verifyRecipient(staff: User, input: VerifyInput, at: Date 
     requestId = req.id;
   }
 
+  let revoked = false;
   const result = await prisma.$transaction(async (tx) => {
+    revoked = false;
     const locked = await lockRequest(tx, requestId);
     if (!locked.open) throw new ValidationError(WRONG_CODE);
+    const unlinked = await unlinkedItemIds(tx, locked);
+    if (unlinked.length) {
+      revoked = true;
+      await cancelRevoked(tx, locked, unlinked, staff.id, at);
+      // Commit the cancellation, then reject when no child is left to hand over.
+      if ((await tx.pickupItem.count({ where: { requestId, status: { in: ACTIVE } } })) === 0) return null;
+    }
     const req = await tx.pickupRequest.update({
       where: { id: requestId },
       data: { verifiedAt: at, verifiedById: staff.id, verifyMethod: method },
@@ -264,7 +334,9 @@ export async function verifyRecipient(staff: User, input: VerifyInput, at: Date 
       items: items.map((i) => ({ itemId: i.id, studentName: i.student.fullName, status: i.status })),
     };
   });
-  await emitPickupChanged(requestId);
+  if (revoked) await announceRevoked([requestId]);
+  else await emitPickupChanged(requestId);
+  if (!result) throw new ValidationError(NOT_AUTHORISED);
   return result;
 }
 
@@ -275,12 +347,21 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
   const req = await loadRequest(requestId);
   await assertBranchAccess(staff, req.branchId);
 
-  await prisma.$transaction(async (tx) => {
+  let revoked = false;
+  const delivered = await prisma.$transaction(async (tx) => {
+    revoked = false;
     const cur = await lockRequest(tx, requestId);
     if (!isToday(cur, at)) throw new ValidationError(STALE);
     if (!cur.open) throw new Conflict('الطلب مغلق');
     const age = cur.verifiedAt ? at.getTime() - cur.verifiedAt.getTime() : Infinity;
     if (age < 0 || age > VERIFY_VALID_MS) throw new Conflict('يجب التحقق من المستلم قبل التسليم');
+    const unlinked = await unlinkedItemIds(tx, cur);
+    if (unlinked.length) {
+      revoked = true;
+      await cancelRevoked(tx, cur, unlinked, staff.id, at);
+      // Commit the cancellation; refuse the whole hand-over so staff re-checks who is at the gate.
+      if (ids.some((id) => unlinked.includes(id))) return false;
+    }
     const res = await tx.pickupItem.updateMany({
       where: { id: { in: ids }, requestId, status: 'READY' },
       data: { status: nextStatus('READY', 'DELIVER'), deliveredAt: at, deliveredById: staff.id },
@@ -291,7 +372,10 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
       tx,
     );
     await closeIfDone(tx, requestId, at);
+    return true;
   });
+  if (revoked) await announceRevoked([requestId]);
+  if (!delivered) throw new Conflict(NOT_AUTHORISED);
   await notify([req.requesterId], 'ITEM_DELIVERED', { requestId, itemIds: ids });
   await emitPickupChanged(requestId);
 }

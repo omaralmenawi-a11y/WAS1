@@ -3,6 +3,7 @@ import { prisma } from '../../src/lib/db';
 import { createSchoolWithAdmin } from '../../src/lib/admin/schools';
 import { createClassroom, createGate, setClassSchedule, updateBranch } from '../../src/lib/school/setup';
 import { applyImport } from '../../src/lib/school/import';
+import { setStudentActive, updateStudent } from '../../src/lib/school/students';
 import { advanceItem, cancelRequest, changeGate, createRequest, deliverItems, markArrived, updateLocation, verifyRecipient } from '../../src/lib/pickup/service';
 import { getOwnPickupCode, listOwnRequests } from '../../src/lib/pickup/own';
 import { checkPickupCode, pickupCode, qrPayload } from '../../src/lib/pickup/code';
@@ -207,6 +208,84 @@ describe('lifecycle', () => {
     expect(await prisma.auditLog.count({ where: { action: 'GATE_CHANGED' } })).toBe(1);
     const s2 = await mkSchool('b');
     await expect(changeGate(staff, r.id, s2.gate.id, T)).rejects.toThrow(NotFound);
+  });
+});
+
+describe('guardian link revoked mid-request', () => {
+  const REVOKED = 'أُلغي من المدرسة: تغيّرت صلاحية الاستلام';
+  async function readyReq() {
+    const ctx = await setup();
+    const r = await createRequest(ctx.g, [ctx.a.id], T);
+    await advanceItem(ctx.staff, r.items[0].id, 'PREPARE', T);
+    await advanceItem(ctx.staff, r.items[0].id, 'READY', T);
+    await prisma.pickupRequest.update({ where: { id: r.id }, data: { lat: 1, lng: 2, locationAt: T, etaSeconds: 5 } });
+    return { ...ctx, r };
+  }
+  const expectRevoked = async (requestId: string) => {
+    const req = await prisma.pickupRequest.findUniqueOrThrow({ where: { id: requestId }, include: { items: true } });
+    expect(req).toMatchObject({ open: false, lat: null, lng: null, locationAt: null, etaSeconds: null });
+    expect(req.items.every((i) => i.status === 'CANCELLED' && i.cancelReason === REVOKED)).toBe(true);
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { action: 'PICKUP_CANCELLED', entityId: requestId } });
+    expect(audit.data).toMatchObject({ reason: REVOKED, branchId: req.branchId });
+  };
+
+  it('verify re-checks the link: phone removed behind the services -> rejected and item cancelled', async () => {
+    const { a, staff, r } = await readyReq();
+    await prisma.guardianPhone.deleteMany({ where: { studentId: a.id } });
+    await expect(verifyRecipient(staff, { requestNumber: r.number, code: pickupCode(r.id, T) }, T)).rejects.toThrow('لم يعد المستلم مخوّلاً');
+    await expectRevoked(r.id);
+  });
+
+  it('verify re-checks student.active', async () => {
+    const { a, staff, r } = await readyReq();
+    await prisma.student.update({ where: { id: a.id }, data: { active: false } });
+    await expect(verifyRecipient(staff, { qr: qrPayload(r.id, T) }, T)).rejects.toThrow('لم يعد المستلم مخوّلاً');
+    await expectRevoked(r.id);
+  });
+
+  it('deliver re-checks the link after verification', async () => {
+    const { a, staff, r } = await readyReq();
+    await verifyRecipient(staff, { requestNumber: r.number, code: pickupCode(r.id, T) }, T);
+    await prisma.guardianPhone.deleteMany({ where: { studentId: a.id } });
+    await expect(deliverItems(staff, r.id, [r.items[0].id], T)).rejects.toThrow('لم يعد المستلم مخوّلاً');
+    await expectRevoked(r.id);
+  });
+
+  it('only the unlinked sibling is skipped; the linked one is still handed over', async () => {
+    const { a, b, g, staff } = await setup();
+    const r = await createRequest(g, [a.id, b.id], T);
+    for (const i of r.items) { await advanceItem(staff, i.id, 'PREPARE', T); await advanceItem(staff, i.id, 'READY', T); }
+    await prisma.guardianPhone.deleteMany({ where: { studentId: b.id } });
+    const v = await verifyRecipient(staff, { requestNumber: r.number, code: pickupCode(r.id, T) }, T);
+    const bItem = r.items.find((i) => i.studentId === b.id)!;
+    const aItem = r.items.find((i) => i.studentId === a.id)!;
+    expect(v.items.find((i) => i.itemId === bItem.id)!.status).toBe('CANCELLED');
+    await deliverItems(staff, r.id, [aItem.id], T);
+    const req = await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } });
+    expect(req.open).toBe(false);
+  });
+
+  it('updateStudent removing the phone cancels the active item', async () => {
+    const { a, s, r } = await readyReq();
+    await updateStudent(s.admin, { id: a.id, fullName: 'أحمد' });
+    expect((await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } })).open).toBe(true); // no phone change
+    await updateStudent(s.admin, { id: a.id, phones: ['0507654321'] });
+    await expectRevoked(r.id);
+  });
+
+  it('deactivating the student cancels the active item', async () => {
+    const { a, s, r } = await readyReq();
+    await setStudentActive(s.admin, { id: a.id, active: false });
+    await expectRevoked(r.id);
+  });
+
+  it('an import that drops the phone cancels the active item; one that keeps it does not', async () => {
+    const { a, s, r } = await readyReq();
+    const row = { branch: s.branch.name, externalId: a.externalId!, fullName: a.fullName, classroom: '1/أ', gate: 'بوابة 1' };
+    await applyImport(s.admin, s.school.id, [{ ...row, phones: [P1, '0507654321'] }]);
+    expect((await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } })).open).toBe(true);
+    await applyImport(s.admin, s.school.id, [{ ...row, phones: ['0507654321'] }]);
+    await expectRevoked(r.id);
   });
 });
 

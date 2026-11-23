@@ -5,6 +5,7 @@ import { writeAudit } from '../audit';
 import { assertBranchAccess, assertSchoolAccess } from '../authz';
 import { Conflict, NotFound, ValidationError } from '../errors';
 import { normalizePhone } from '../phone';
+import { announceRevoked, revokeUnlinkedItems } from '../pickup/service';
 import { parse, requireManager } from './setup';
 
 const id = z.string().min(1, 'المعرف مطلوب');
@@ -94,7 +95,8 @@ export async function updateStudent(
   const schoolId = branchId === s.branchId ? s.schoolId : (await prisma.branch.findUnique({ where: { id: branchId }, select: { schoolId: true } }))?.schoolId;
   if (schoolId !== s.schoolId) throw new NotFound(); // never move a student across schools
   try {
-    return await prisma.$transaction(async (tx) => {
+    let revoked: string[] = [];
+    const out = await prisma.$transaction(async (tx) => {
       await assertRefs(tx, branchId, classroomId, gateId);
       const u = await tx.student.update({
         where: { id: s.id },
@@ -109,10 +111,14 @@ export async function updateStudent(
       if (phones) {
         await tx.guardianPhone.deleteMany({ where: { studentId: s.id } });
         if (phones.length) await tx.guardianPhone.createMany({ data: phones.map((phone) => ({ studentId: s.id, phone })) });
+        // A guardian whose phone was removed must not collect the child on a request already in flight.
+        revoked = await revokeUnlinkedItems(tx, [s.id], actor.id);
       }
       await writeAudit({ schoolId: s.schoolId, actorId: actor.id, action: 'STUDENT_UPDATED', entity: 'Student', entityId: s.id, data: { fullName: u.fullName, branchId, classroomId, gateId, phones: phones?.length ?? null } }, tx);
       return u;
     });
+    await announceRevoked(revoked);
+    return out;
   } catch (e) {
     if (isUnique(e)) throw new Conflict(DUP);
     throw e;
@@ -123,11 +129,15 @@ export async function setStudentActive(actor: User, input: { id: string; active:
   const i = parse(z.object({ id, active: z.boolean({ message: 'الحالة غير صالحة' }) }), input);
   requireManager(actor);
   const s = await loadStudent(actor, i.id);
-  return prisma.$transaction(async (tx) => {
+  let revoked: string[] = [];
+  const out = await prisma.$transaction(async (tx) => {
     const u = await tx.student.update({ where: { id: s.id }, data: { active: i.active } });
     await writeAudit({ schoolId: s.schoolId, actorId: actor.id, action: i.active ? 'STUDENT_ACTIVATED' : 'STUDENT_DEACTIVATED', entity: 'Student', entityId: s.id, data: {} }, tx);
+    if (!i.active) revoked = await revokeUnlinkedItems(tx, [s.id], actor.id);
     return u;
   });
+  await announceRevoked(revoked);
+  return out;
 }
 
 export async function listStudents(
