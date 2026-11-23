@@ -8,10 +8,38 @@ import { getPushSender } from './push';
 export type NotificationPayload = { kind: string; title: string; body: string; url: string };
 
 const PUSH_TIMEOUT_MS = 10_000;
+let pushTimeoutMs = PUSH_TIMEOUT_MS;
+
+/** Tests: shorten the per-device push timeout (no argument restores the default). */
+export function setPushTimeoutMs(ms?: number): void {
+  pushTimeoutMs = ms ?? PUSH_TIMEOUT_MS;
+}
 
 function withTimeout<T>(p: Promise<T>, fallback: T): Promise<T> {
   let t: NodeJS.Timeout;
-  return Promise.race([p, new Promise<T>((r) => (t = setTimeout(() => r(fallback), PUSH_TIMEOUT_MS)))]).finally(() => clearTimeout(t));
+  return Promise.race([p, new Promise<T>((r) => (t = setTimeout(() => r(fallback), pushTimeoutMs)))]).finally(() => clearTimeout(t));
+}
+
+const pending = new Set<Promise<void>>();
+
+/**
+ * Runs fn after the caller has moved on (a slow push service must not hold up a gate response or board update).
+ * Errors are logged, never thrown. flushNotifications() awaits everything started this way.
+ */
+export function notifyInBackground(fn: () => Promise<unknown>): void {
+  const p: Promise<void> = Promise.resolve()
+    .then(fn)
+    .then(
+      () => undefined,
+      (e) => console.error('background notification failed', e),
+    )
+    .finally(() => pending.delete(p));
+  pending.add(p);
+}
+
+/** Tests: wait for all background notification work (including work it starts). */
+export async function flushNotifications(): Promise<void> {
+  while (pending.size) await Promise.all([...pending]);
 }
 
 async function notifyOne(userId: string, payload: NotificationPayload, dedupeKey: string | undefined) {

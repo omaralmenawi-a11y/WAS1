@@ -1,5 +1,6 @@
-import { beforeEach } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
 import { prisma } from '../../src/lib/db';
+import { flushNotifications } from '../../src/lib/notify';
 
 export async function resetDb() {
   const rows = await prisma.$queryRaw<{ tablename: string }[]>`
@@ -12,4 +13,9 @@ export async function resetDb() {
 
 beforeEach(async () => {
   await resetDb();
+});
+
+// Background notifications must not outlive their test (the next test truncates the tables).
+afterEach(async () => {
+  await flushNotifications();
 });

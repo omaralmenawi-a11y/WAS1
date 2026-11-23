@@ -6,7 +6,7 @@ import { writeAudit } from '../audit';
 import { assertBranchAccess } from '../authz';
 import { Conflict, Forbidden, NotFound, RateLimitError, ValidationError } from '../errors';
 import { buildScheduleCtxs, listChildrenForUser, SCHEDULE_INCLUDE } from '../guardian/children';
-import { notify } from '../notify';
+import { notify, notifyInBackground } from '../notify';
 import { msgCancelled, msgDelivered, msgPreparing, msgReady } from '../notify/messages';
 import { linkedGuardianIds } from '../notify/recipients';
 import { emitPickupChanged } from '../realtime';
@@ -83,14 +83,8 @@ async function loadNotifyCtx(requestId: string) {
   return { number: r.number, requesterId: r.requesterId, gate: gate?.name ?? '', items: r.items.map((i) => ({ ...i, name: firstName(i.student.fullName) })) };
 }
 
-/** Post-commit, never throws: a notification problem must not fail the mutation. */
-async function safely(fn: () => Promise<unknown>): Promise<void> {
-  try {
-    await fn();
-  } catch (e) {
-    console.error('pickup notification failed', e);
-  }
-}
+/** Post-commit, never awaited, never throws: a slow or failing notification must not delay or fail the mutation. */
+const safely = (fn: () => Promise<unknown>): void => notifyInBackground(fn);
 
 /** PREPARING / READY are per item: each names only the child of the item just advanced (N4). */
 async function notifyProgress(requestId: string, itemId: string, kind: 'PREPARING' | 'READY'): Promise<void> {
@@ -195,14 +189,14 @@ export async function announceRevoked(batches: RevokedBatch[]): Promise<void> {
     merged.set(b.requestId, set);
   }
   for (const [requestId, studentIds] of merged) {
-    await safely(async () => {
+    await emitPickupChanged(requestId);
+    safely(async () => {
       const ctx = await loadNotifyCtx(requestId);
       if (!ctx) return;
       const recipients = await linkedGuardianIds([...studentIds]);
       if (recipients.length === 0) return;
       await notify(recipients, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason: REVOKED_REASON }), url: statusUrl(requestId) });
     });
-    await emitPickupChanged(requestId);
   }
 }
 
@@ -329,8 +323,8 @@ export async function advanceItem(staff: User, itemId: string, action: 'PREPARE'
     );
     return tx.pickupItem.findUniqueOrThrow({ where: { id: itemId } });
   });
-  if (to === 'PREPARING' || to === 'READY') await safely(() => notifyProgress(item.requestId, itemId, to));
   await emitPickupChanged(item.requestId);
+  if (to === 'PREPARING' || to === 'READY') safely(() => notifyProgress(item.requestId, itemId, to));
   return updated;
 }
 
@@ -480,8 +474,8 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
   });
   if (revoked) await announceRevoked([revoked]);
   if (!delivered) throw new Conflict(NOT_AUTHORISED);
-  await safely(() => notifyDelivered(requestId, ids, at));
   await emitPickupChanged(requestId);
+  safely(() => notifyDelivered(requestId, ids, at));
 }
 
 export async function cancelRequest(actor: User, requestId: string, reasonAr?: string, at: Date = now()): Promise<void> {
@@ -511,8 +505,8 @@ export async function cancelRequest(actor: User, requestId: string, reasonAr?: s
       tx,
     );
   });
-  await safely(() => notifyCancelled(requestId, cancelledIds, reason));
   await emitPickupChanged(requestId);
+  safely(() => notifyCancelled(requestId, cancelledIds, reason));
 }
 
 const MAX_ACCURACY_M = 500;

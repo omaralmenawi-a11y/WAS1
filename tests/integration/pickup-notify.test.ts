@@ -10,6 +10,7 @@ import { advanceItem, cancelRequest, closeStaleRequests, createRequest, deliverI
 import { pickupCode } from '../../src/lib/pickup/code';
 import { linkedGuardianIds } from '../../src/lib/notify/recipients';
 import { setPushSender } from '../../src/lib/notify/push';
+import { flushNotifications } from '../../src/lib/notify';
 
 process.env.PICKUP_CODE_SECRET ||= 'test-secret';
 
@@ -20,7 +21,10 @@ const P2 = '+966507654321';
 const P3 = '+966509999999';
 
 beforeEach(() => setPushSender(null));
-afterEach(() => setPushSender(null));
+afterEach(async () => {
+  await flushNotifications();
+  setPushSender(null);
+});
 
 const guardian = (phone: string, name = 'ولي') => prisma.user.create({ data: { role: 'GUARDIAN', name, phone, passwordHash: 'x', photoKey: 'p' } });
 
@@ -40,7 +44,10 @@ async function setup() {
   const req = await createRequest(g1, [a.id, b.id], T);
   return { s, a, b, g1, g2, other, staff, req };
 }
-const rows = (userId: string, kind?: string) => prisma.notification.findMany({ where: { userId, ...(kind ? { kind } : {}) } });
+const rows = async (userId: string, kind?: string) => {
+  await flushNotifications();
+  return prisma.notification.findMany({ where: { userId, ...(kind ? { kind } : {}) } });
+};
 
 describe('linkedGuardianIds', () => {
   it('returns active guardians whose phone matches a student phone', async () => {
@@ -106,6 +113,7 @@ describe('pickup status notifications', () => {
     const spy = vi.spyOn(recipients, 'linkedGuardianIds').mockRejectedValue(new Error('boom'));
     try {
       await expect(deliverItems(staff, req.id, req.items.map((i) => i.id), plus(T, 4))).resolves.toBeUndefined();
+      await flushNotifications();
       expect(spy).toHaveBeenCalled();
     } finally {
       spy.mockRestore();
@@ -122,6 +130,26 @@ describe('pickup status notifications', () => {
     await verifyRecipient(staff, { requestNumber: req.number, code: pickupCode(req.id, plus(T, 3)) }, plus(T, 3));
     await expect(deliverItems(staff, req.id, req.items.map((i) => i.id), plus(T, 4))).resolves.toBeUndefined();
     expect(await rows(g1.id, 'DELIVERED')).toHaveLength(1);
+  });
+
+  it('a push endpoint that never answers does not delay the hand-over; the inbox row is still written', async () => {
+    const { req, staff, g1 } = await setup();
+    await prisma.pushSubscription.create({ data: { userId: g1.id, endpoint: 'https://e/hung', p256dh: 'p', auth: 'a' } });
+    const release: (() => void)[] = [];
+    setPushSender({ send: () => new Promise((r) => release.push(() => r('ok'))) });
+    try {
+      for (const i of req.items) await advanceItem(staff, i.id, 'PREPARE', plus(T, 1));
+      for (const i of req.items) await advanceItem(staff, i.id, 'READY', plus(T, 2));
+      await verifyRecipient(staff, { requestNumber: req.number, code: pickupCode(req.id, plus(T, 3)) }, plus(T, 3));
+      const t0 = Date.now();
+      await deliverItems(staff, req.id, req.items.map((i) => i.id), plus(T, 4));
+      expect(Date.now() - t0).toBeLessThan(1000);
+      expect(await prisma.pickupItem.count({ where: { requestId: req.id, status: 'DELIVERED' } })).toBe(2);
+      await vi.waitFor(async () => expect(await prisma.notification.count({ where: { userId: g1.id, kind: 'DELIVERED' } })).toBe(1));
+    } finally {
+      await vi.waitFor(() => expect(release.length).toBeGreaterThanOrEqual(5));
+      release.forEach((r) => r());
+    }
   });
 
   it('staff cancel: body is the reason, requester and other guardian notified', async () => {
