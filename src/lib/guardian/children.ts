@@ -1,6 +1,6 @@
 import type { ItemStatus, User } from '@prisma/client';
 import { prisma } from '../db';
-import { dismissalFor, type ScheduleCtx } from '../schedule';
+import { canRequestNow, dismissalFor, type ScheduleCtx } from '../schedule';
 import { now, riyadhDay } from '../time';
 
 export type ChildView = {
@@ -14,6 +14,7 @@ export type ChildView = {
   todayDismissal: string | null;
   status: 'IN_SCHOOL' | ItemStatus;
   activeRequestId: string | null;
+  canRequest: { ok: boolean; reasonAr?: string };
 };
 
 const ACTIVE: ItemStatus[] = ['EN_ROUTE', 'PREPARING', 'READY'];
@@ -73,7 +74,7 @@ export async function listChildrenForUser(user: User): Promise<ChildView[]> {
   const students = await prisma.student.findMany({
     where: { active: true, phones: { some: { phone: user.phone } } },
     include: {
-      school: { select: { name: true, weekDays: true } },
+      school: { select: { name: true, weekDays: true, pickupLeadMin: true, pickupTailMin: true } },
       branch: { select: { name: true } },
       classroom: { include: { schedules: true } },
     },
@@ -91,6 +92,7 @@ export async function listChildrenForUser(user: User): Promise<ChildView[]> {
       orderBy: { request: { createdAt: 'desc' } },
     }),
   ]);
+  const at = now();
   const gateName = new Map(gates.map((g) => [g.id, g.name]));
 
   return students.map((s) => {
@@ -105,6 +107,7 @@ export async function listChildrenForUser(user: User): Promise<ChildView[]> {
     } else if (mine[0]?.status === 'DELIVERED') {
       status = 'DELIVERED';
     }
+    const can = canRequestNow(ctx, s.school.pickupLeadMin, s.school.pickupTailMin, at);
     return {
       studentId: s.id,
       fullName: s.fullName,
@@ -116,6 +119,7 @@ export async function listChildrenForUser(user: User): Promise<ChildView[]> {
       todayDismissal: dismissalFor(ctx, today),
       status,
       activeRequestId,
+      canRequest: can.ok ? { ok: true } : { ok: false, reasonAr: can.reasonAr },
     };
   });
 }

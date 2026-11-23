@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { IBM_Plex_Sans_Arabic, Readex_Pro } from 'next/font/google';
 import './globals.css';
 
@@ -13,7 +13,13 @@ const heading = Readex_Pro({
   variable: '--font-heading',
 });
 
-export const metadata: Metadata = { title: 'وَصْل' };
+export const metadata: Metadata = {
+  title: 'وَصْل',
+  manifest: '/manifest.webmanifest',
+  icons: { icon: '/icons/icon.svg', apple: '/icons/icon-192.png' },
+  appleWebApp: { capable: true, title: 'وصل', statusBarStyle: 'default' },
+};
+export const viewport: Viewport = { themeColor: '#123B67', width: 'device-width', initialScale: 1 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

@@ -4,7 +4,8 @@ import { createSchoolWithAdmin } from '../../src/lib/admin/schools';
 import { createClassroom, createGate, setClassSchedule, updateBranch } from '../../src/lib/school/setup';
 import { applyImport } from '../../src/lib/school/import';
 import { advanceItem, cancelRequest, changeGate, createRequest, deliverItems, markArrived, updateLocation, verifyRecipient } from '../../src/lib/pickup/service';
-import { pickupCode, qrPayload } from '../../src/lib/pickup/code';
+import { getOwnPickupCode, listOwnRequests } from '../../src/lib/pickup/own';
+import { checkPickupCode, pickupCode, qrPayload } from '../../src/lib/pickup/code';
 import { Conflict, NotFound, RateLimitError, ValidationError } from '../../src/lib/errors';
 import type { User } from '@prisma/client';
 
@@ -370,5 +371,68 @@ describe('updateLocation / markArrived', () => {
     expect(await prisma.auditLog.count({ where: { action: 'PICKUP_ARRIVED', entityId: r.id, schoolId: s.school.id } })).toBe(1);
     await cancelRequest(g, r.id);
     await expect(markArrived(g, r.id, plus(T, 4))).rejects.toThrow(Conflict);
+  });
+});
+
+describe('parent own-request helpers', () => {
+  it('getOwnPickupCode: requester gets a valid code; others and closed requests get NotFound', async () => {
+    const { a, g } = await setup();
+    const r = await createRequest(g, [a.id], T);
+    const out = await getOwnPickupCode(g, r.id, plus(T, 1));
+    expect(out.code).toMatch(/^\d{6}$/);
+    expect(checkPickupCode(r.id, out.code, plus(T, 1))).toBe(true);
+    expect(out.qr).toBe(qrPayload(r.id, plus(T, 1)));
+    const sec = Math.floor(plus(T, 1).getTime() / 1000);
+    expect(out.expiresInSec).toBe(60 - (sec % 60));
+    const other = await guardian('+966507654321', 'آخر');
+    await expect(getOwnPickupCode(other, r.id, plus(T, 1))).rejects.toThrow(NotFound);
+    await expect(getOwnPickupCode(g, r.id, plus(T, 24 * 60))).rejects.toThrow(NotFound);
+    await cancelRequest(g, r.id);
+    await expect(getOwnPickupCode(g, r.id, plus(T, 2))).rejects.toThrow(NotFound);
+  });
+
+  it('listOwnRequests: open filter, closed history with delivering staff, limit', async () => {
+    const { a, b, g, staff } = await setup();
+    const r1 = await createRequest(g, [a.id], T);
+    await cancelRequest(g, r1.id, undefined, plus(T, 1));
+    const r2 = await createRequest(g, [b.id], plus(T, 2));
+    const other = await guardian('+966507654321', 'آخر');
+    expect(await listOwnRequests(other, { open: true, limit: 10 })).toEqual([]);
+
+    const open = await listOwnRequests(g, { open: true, limit: 10 });
+    expect(open.map((x) => x.id)).toEqual([r2.id]);
+
+    const items = await prisma.pickupItem.findMany({ where: { requestId: r2.id } });
+    await advanceItem(staff, items[0].id, 'PREPARE', plus(T, 3));
+    await advanceItem(staff, items[0].id, 'READY', plus(T, 4));
+    await verifyRecipient(staff, { requestId: r2.id, code: pickupCode(r2.id, plus(T, 5)) }, plus(T, 5));
+    await deliverItems(staff, r2.id, [items[0].id], plus(T, 6));
+
+    const closed = await listOwnRequests(g, { open: false, limit: 30 });
+    expect(closed.map((x) => x.id).sort()).toEqual([r1.id, r2.id].sort());
+    const d = closed.find((x) => x.id === r2.id)!;
+    expect(d.childNames).toEqual([b.fullName]);
+    expect(d.deliveredAt).toBe(plus(T, 6).toISOString());
+    expect(d.deliveredByName).toBe('موظف');
+    expect(d.day).toBe('2026-11-23');
+    const c = closed.find((x) => x.id === r1.id)!;
+    expect(c.deliveredAt).toBeNull();
+    expect(await listOwnRequests(g, { open: false, limit: 1 })).toHaveLength(1);
+  });
+
+  it('listChildrenForUser reports canRequest per child', async () => {
+    const { a, g } = await setup();
+    const { listChildrenForUser } = await import('../../src/lib/guardian/children');
+    process.env.WASL_FAKE_NOW = T.toISOString();
+    try {
+      expect((await listChildrenForUser(g))[0].canRequest).toEqual({ ok: true });
+      process.env.WASL_FAKE_NOW = '2026-11-23T03:00:00Z';
+      const k = (await listChildrenForUser(g))[0];
+      expect(k.canRequest.ok).toBe(false);
+      expect(k.canRequest.reasonAr).toBeTruthy();
+    } finally {
+      delete process.env.WASL_FAKE_NOW;
+    }
+    void a;
   });
 });
