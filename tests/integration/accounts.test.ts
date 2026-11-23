@@ -3,7 +3,7 @@ import { prisma } from '../../src/lib/db';
 import { issueOtp, verifyOtp } from '../../src/lib/auth/otp';
 import { registerGuardian, login, resetPassword } from '../../src/lib/auth/accounts';
 import { createSession, getSessionUser } from '../../src/lib/auth/session';
-import { InvalidCredentials, RateLimitError } from '../../src/lib/errors';
+import { Conflict, InvalidCredentials, RateLimitError, ValidationError } from '../../src/lib/errors';
 
 const PHONE = '+966501234567';
 
@@ -103,5 +103,42 @@ describe('accounts', () => {
     expect(await getSessionUser('garbage')).toBeNull();
     await prisma.session.updateMany({ data: { expiresAt: new Date(Date.now() - 1000) } });
     expect(await getSessionUser(st)).toBeNull();
+  });
+
+  it('locks login after 10 failed attempts even with the right password', async () => {
+    const code = await otpFor(PHONE);
+    await registerGuardian({ identifier: PHONE, code, name: 'x', password: 'password123' });
+    for (let i = 0; i < 10; i++) {
+      await expect(login({ identifier: PHONE, password: 'wrong-wrong' })).rejects.toBeInstanceOf(InvalidCredentials);
+    }
+    await expect(login({ identifier: '0501234567', password: 'password123' })).rejects.toBeInstanceOf(RateLimitError);
+  });
+
+  it('parallel wrong OTP guesses cannot exceed the attempt cap', async () => {
+    const code = await otpFor(PHONE);
+    const wrong = code === '000000' ? '111111' : '000000';
+    await Promise.all(Array.from({ length: 10 }, () => verifyOtp(PHONE, 'REGISTER', wrong)));
+    const row = await prisma.otpCode.findFirstOrThrow();
+    expect(row.attempts).toBe(5);
+    expect(await verifyOtp(PHONE, 'REGISTER', code)).toBe(false);
+  });
+
+  it('fails closed outside OTP_MODE=dev', async () => {
+    const prev = process.env.OTP_MODE;
+    delete process.env.OTP_MODE;
+    try {
+      await expect(issueOtp(PHONE, 'REGISTER')).rejects.toMatchObject({ code: 'OTP_UNAVAILABLE', status: 503 });
+      expect(await prisma.otpCode.count()).toBe(0);
+    } finally {
+      process.env.OTP_MODE = prev;
+    }
+  });
+
+  it('registering an existing identifier with a wrong code gives the OTP error, not Conflict', async () => {
+    const code = await otpFor(PHONE);
+    await registerGuardian({ identifier: PHONE, code, name: 'x', password: 'password123' });
+    const p = registerGuardian({ identifier: PHONE, code: '123456', name: 'y', password: 'password123' });
+    await expect(p).rejects.toBeInstanceOf(ValidationError);
+    await expect(p).rejects.not.toBeInstanceOf(Conflict);
   });
 });

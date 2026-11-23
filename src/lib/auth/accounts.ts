@@ -1,7 +1,8 @@
 import type { User } from '@prisma/client';
 import { prisma } from '../db';
-import { Conflict, InvalidCredentials, ValidationError } from '../errors';
+import { Conflict, InvalidCredentials, RateLimitError, ValidationError } from '../errors';
 import { normalizePhone } from '../phone';
+import { now } from '../time';
 import { parseIdentifier } from './identifier';
 import { verifyOtp } from './otp';
 import { hashPassword, verifyPassword } from './password';
@@ -27,11 +28,11 @@ export async function registerGuardian(input: {
   const name = input.name?.trim();
   if (!name) throw new ValidationError('الاسم مطلوب');
   checkPassword(input.password);
-  if (await prisma.user.findUnique({ where: whereIdentifier(id) })) {
-    throw new Conflict('هذا الحساب مسجل مسبقاً');
-  }
   if (!(await verifyOtp(id.value, 'REGISTER', input.code))) {
     throw new ValidationError('رمز التحقق غير صحيح أو منتهي');
+  }
+  if (await prisma.user.findUnique({ where: whereIdentifier(id) })) {
+    throw new Conflict('هذا الحساب مسجل مسبقاً');
   }
   try {
     return await prisma.user.create({
@@ -59,11 +60,30 @@ async function findForLogin(raw: string): Promise<User | null> {
   return prisma.user.findUnique({ where: { username: s } });
 }
 
+const MAX_FAILED_LOGINS = 10;
+const LOGIN_WINDOW_MS = 15 * 60_000;
+let dummyHash: Promise<string> | undefined;
+
+function loginKey(raw: string): string {
+  const s = raw.trim();
+  if (s.includes('@')) return s.toLowerCase();
+  return normalizePhone(s) ?? s;
+}
+
 export async function login(input: { identifier: string; password: string }): Promise<User> {
-  const user = await findForLogin(input.identifier ?? '');
-  if (!user || !(await verifyPassword(user.passwordHash, input.password ?? ''))) {
-    throw new InvalidCredentials();
-  }
+  const raw = input.identifier ?? '';
+  const key = loginKey(raw);
+  const failed = await prisma.loginAttempt.count({
+    where: { identifier: key, success: false, createdAt: { gt: new Date(now().getTime() - LOGIN_WINDOW_MS) } },
+  });
+  if (failed >= MAX_FAILED_LOGINS) throw new RateLimitError('محاولات دخول كثيرة، حاول بعد ١٥ دقيقة');
+
+  const user = await findForLogin(raw);
+  // always run argon2 so unknown accounts are not distinguishable by timing
+  const hash = user?.passwordHash ?? (await (dummyHash ??= hashPassword('wasl-dummy-password')));
+  const ok = await verifyPassword(hash, input.password ?? '');
+  await prisma.loginAttempt.create({ data: { identifier: key, success: !!user && ok, createdAt: now() } });
+  if (!user || !ok) throw new InvalidCredentials();
   return user;
 }
 

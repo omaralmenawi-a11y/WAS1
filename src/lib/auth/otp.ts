@@ -1,6 +1,6 @@
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import { prisma } from '../db';
-import { RateLimitError } from '../errors';
+import { AppError, RateLimitError } from '../errors';
 import { now } from '../time';
 import { parseIdentifier } from './identifier';
 
@@ -17,8 +17,8 @@ export const DevSender: OtpSender = {
   },
 };
 
-let sender: OtpSender = DevSender;
-export function setOtpSender(s: OtpSender) {
+let sender: OtpSender | null = null;
+export function setOtpSender(s: OtpSender | null) {
   sender = s;
 }
 
@@ -31,6 +31,9 @@ const hashCode = (c: string) => createHash('sha256').update(c).digest('hex');
 
 export async function issueOtp(identifier: string, purpose: OtpPurpose): Promise<void> {
   const id = parseIdentifier(identifier).value;
+  const dev = process.env.OTP_MODE === 'dev';
+  const out = dev ? DevSender : sender;
+  if (!out) throw new AppError('OTP_UNAVAILABLE', 'خدمة رمز التحقق غير متاحة حالياً', 503);
   const t = now();
   const sends = await prisma.otpCode.count({
     where: { identifier: id, createdAt: { gt: new Date(t.getTime() - SEND_WINDOW_MS) } },
@@ -38,7 +41,6 @@ export async function issueOtp(identifier: string, purpose: OtpPurpose): Promise
   if (sends >= MAX_SENDS) throw new RateLimitError('تم تجاوز عدد طلبات الرمز، حاول بعد ١٥ دقيقة');
 
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
-  const dev = process.env.OTP_MODE === 'dev';
   await prisma.otpCode.create({
     data: {
       identifier: id,
@@ -49,7 +51,7 @@ export async function issueOtp(identifier: string, purpose: OtpPurpose): Promise
       devVisible: dev ? code : null,
     },
   });
-  await (dev ? DevSender : sender).send(id, `رمز التحقق في وصل: ${code}`);
+  await out.send(id, `رمز التحقق في وصل: ${code}`);
 }
 
 export async function verifyOtp(identifier: string, purpose: OtpPurpose, code: string): Promise<boolean> {
@@ -61,13 +63,17 @@ export async function verifyOtp(identifier: string, purpose: OtpPurpose, code: s
   });
   if (!row || row.expiresAt <= t || row.attempts >= MAX_ATTEMPTS) return false;
 
+  // Count the attempt atomically first; parallel guesses cannot exceed the cap.
+  const claimed = await prisma.otpCode.updateMany({
+    where: { id: row.id, attempts: { lt: MAX_ATTEMPTS }, consumedAt: null },
+    data: { attempts: { increment: 1 } },
+  });
+  if (claimed.count !== 1) return false;
+
   const a = Buffer.from(hashCode(code.trim()));
   const b = Buffer.from(row.codeHash);
-  if (!timingSafeEqual(a, b)) {
-    await prisma.otpCode.update({ where: { id: row.id }, data: { attempts: { increment: 1 } } });
-    return false;
-  }
-  // consume atomically so a code can be used only once
+  if (!timingSafeEqual(a, b)) return false;
+  // consume so a code can be used only once
   const res = await prisma.otpCode.updateMany({
     where: { id: row.id, consumedAt: null },
     data: { consumedAt: t },

@@ -216,3 +216,12 @@ model AuditLog {
   data      Json
   createdAt DateTime @default(now())
 }
+
+model LoginAttempt {
+  id         String   @id @default(cuid())
+  identifier String
+  success    Boolean
+  createdAt  DateTime @default(now())
+
+  @@index([identifier, createdAt])
+}
