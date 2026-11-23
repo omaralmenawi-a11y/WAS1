@@ -12,7 +12,7 @@ export async function listStaffRequests(
   opts: { q?: string; branchId?: string } = {},
   at: Date = now(),
 ): Promise<StaffRequestView[]> {
-  if (user.role !== 'STAFF' && user.role !== 'SCHOOL_ADMIN') throw new Forbidden();
+  if (user.role !== 'STAFF' && user.role !== 'SCHOOL_ADMIN' && user.role !== 'PLATFORM_ADMIN') throw new Forbidden();
   let branchId: string;
   if (user.role === 'STAFF') {
     if (!user.branchId) throw new NotFound();

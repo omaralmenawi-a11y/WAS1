@@ -4,9 +4,11 @@ import { prisma } from '../../src/lib/db';
 import { createSchoolWithAdmin } from '../../src/lib/admin/schools';
 import { createBranch, createClassroom, createGate, regenerateBoardToken, setClassSchedule } from '../../src/lib/school/setup';
 import { applyImport } from '../../src/lib/school/import';
-import { advanceItem, createRequest } from '../../src/lib/pickup/service';
+import { advanceItem, cancelRequest, createRequest, deliverItems, verifyRecipient } from '../../src/lib/pickup/service';
 import { getDashboard, listBranchAudit } from '../../src/lib/school/dashboard';
-import { Forbidden, NotFound } from '../../src/lib/errors';
+import { pickupCode } from '../../src/lib/pickup/code';
+import { listStaffRequests } from '../../src/lib/pickup/staff';
+import { Forbidden, NotFound, ValidationError } from '../../src/lib/errors';
 import { createSession } from '../../src/lib/auth/session';
 import { GET as getDash } from '../../src/app/api/school/dashboard/route';
 import { GET as getAudit } from '../../src/app/api/school/audit/route';
@@ -84,19 +86,75 @@ describe('getDashboard', () => {
     expect(d.avgWaitSecToday).toBeNull();
   });
 
-  it("excludes another branch's data, requests and audit", async () => {
+  it("keeps each branch's counts and requests separate", async () => {
     const { s, reqs } = await world();
     const b2 = await createBranch(s.admin, { name: 'فرع ثان' });
     const d2 = await getDashboard(s.admin, b2.id, T);
-    expect(d2.counts.open).toBe(0);
-    expect(d2.counts.deliveredToday).toBe(0);
+    expect(d2.counts).toEqual({ open: 0, enRoute: 0, preparing: 0, ready: 0, deliveredToday: 0 });
     expect(d2.avgWaitSecToday).toBeNull();
     expect(d2.requests).toEqual([]);
-    expect(d2.recent).toEqual([]);
     const d1 = await getDashboard(s.admin, s.branch.id, T);
     expect(d1.requests.map((r) => r.id)).not.toContain(reqs[0].id);
-    // setup audit (branch created etc.) never shows in the feed
     expect(d1.recent.every((e) => e.action !== 'BRANCH_CREATED')).toBe(true);
+  });
+
+  it('audit feed holds only own-branch events from real service calls in two branches', async () => {
+    const s = await mkSchool('x');
+    const b2 = await createBranch(s.admin, { name: 'فرع ثان' });
+    await createGate(s.admin, { branchId: b2.id, name: 'بوابة ب' });
+    const room2 = await createClassroom(s.admin, { branchId: b2.id, name: '2/ب', grade: '2' });
+    for (const w of [0, 1, 2, 3, 4]) await setClassSchedule(s.admin, { classroomId: room2.id, weekday: w, dismissal: '12:30' });
+    await applyImport(s.admin, s.school.id, [
+      { branch: s.branch.name, externalId: 'a1', fullName: 'أحمد', classroom: '1/أ', gate: 'بوابة 1', phones: [phone(1)] },
+      { branch: s.branch.name, externalId: 'a2', fullName: 'بدر', classroom: '1/أ', gate: 'بوابة 1', phones: [phone(2)] },
+      { branch: b2.name, externalId: 'b1', fullName: 'خالد', classroom: '2/ب', gate: 'بوابة ب', phones: [phone(3)] },
+      { branch: b2.name, externalId: 'b2', fullName: 'سعد', classroom: '2/ب', gate: 'بوابة ب', phones: [phone(4)] },
+    ]);
+    const st = Object.fromEntries((await prisma.student.findMany({ where: { schoolId: s.school.id } })).map((x) => [x.fullName, x]));
+    const mkStaff = (branchId: string, u: string) =>
+      prisma.user.create({ data: { role: 'STAFF', name: u, passwordHash: 'x', branchId, schoolId: s.school.id, gateIds: [], username: u } });
+    const [staff1, staff2] = [await mkStaff(s.branch.id, 'st1'), await mkStaff(b2.id, 'st2')];
+    const g = await Promise.all([1, 2, 3, 4].map(guardian));
+
+    async function flow(staff: typeof staff1, deliverG: (typeof g)[0], deliverS: string, cancelG: (typeof g)[0], cancelS: string) {
+      const r = await createRequest(deliverG, [deliverS], T);
+      const itemId = r.items[0].id;
+      await advanceItem(staff, itemId, 'PREPARE', T);
+      await advanceItem(staff, itemId, 'READY', T);
+      await verifyRecipient(staff, { code: pickupCode(r.id, T) }, T);
+      await deliverItems(staff, r.id, [itemId], T);
+      const c = await createRequest(cancelG, [cancelS], T);
+      await cancelRequest(cancelG, c.id, undefined, T);
+    }
+    await flow(staff1, g[0], st['أحمد'].id, g[1], st['بدر'].id);
+    await flow(staff2, g[2], st['خالد'].id, g[3], st['سعد'].id);
+
+    const want = ['PICKUP_CREATED', 'ITEM_PREPARING', 'ITEM_READY', 'RECIPIENT_VERIFIED', 'ITEM_DELIVERED', 'PICKUP_CANCELLED'];
+    const rows = await prisma.auditLog.findMany({ where: { action: { in: want } } });
+    expect(rows).toHaveLength(2 * 7); // 2 created per branch + 5 others
+    for (const r of rows) expect((r.data as { branchId?: string }).branchId, r.action).toBeTruthy();
+
+    for (const [branch, other] of [[s.branch.id, b2.id], [b2.id, s.branch.id]] as const) {
+      const d = await getDashboard(s.admin, branch, T);
+      const ids = new Set(d.recent.map((e) => e.id));
+      const own = rows.filter((r) => (r.data as { branchId: string }).branchId === branch);
+      expect(own).toHaveLength(7);
+      expect([...ids].sort()).toEqual(own.map((r) => r.id).sort());
+      expect(rows.filter((r) => (r.data as { branchId: string }).branchId === other).some((r) => ids.has(r.id))).toBe(false);
+      for (const a of ['ITEM_DELIVERED', 'RECIPIENT_VERIFIED', 'PICKUP_CANCELLED']) expect(d.recent.map((e) => e.action)).toContain(a);
+      expect(d.counts.deliveredToday).toBe(1);
+      const feed = await listBranchAudit(s.admin, branch, 100);
+      expect(feed.map((e) => e.id).sort()).toEqual(own.map((r) => r.id).sort());
+    }
+  });
+
+  it('platform admin can read any branch dashboard and staff list; needs branchId', async () => {
+    const { s } = await world();
+    const pa = await prisma.user.create({ data: { role: 'PLATFORM_ADMIN', name: 'منصة', passwordHash: 'x', username: 'plat1' } });
+    const d = await getDashboard(pa, s.branch.id, T);
+    expect(d.counts.open).toBe(3);
+    expect(await listStaffRequests(pa, { branchId: s.branch.id }, T)).toHaveLength(3);
+    await expect(listStaffRequests(pa, {}, T)).rejects.toBeInstanceOf(ValidationError);
   });
 
   it('does not count yesterday or later days', async () => {
