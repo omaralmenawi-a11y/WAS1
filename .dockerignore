@@ -1,0 +1,20 @@
+# Secrets: never bake local env files into the image.
+.env*
+
+# Dependencies and build output are produced inside the image.
+node_modules
+.next
+dist
+*.tsbuildinfo
+
+# VCS, agent workspace and editor noise.
+.git
+.gitignore
+.superpowers
+
+# Test / e2e artifacts.
+test-results
+playwright-report
+blob-report
+e2e/.auth
+coverage
