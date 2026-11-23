@@ -38,7 +38,23 @@ check() { # label, then the command that starts the server
   stop
 }
 
+# Production refuses unsafe configuration (exit 1) before listening.
+refuses() { # label, then the command that starts the server
+  local label="$1"; shift
+  local port; port="$(free_port)"
+  local code=0
+  PORT="$port" timeout 120 "$@" > "$LOG" 2>&1 || code=$?
+  if [[ "$code" != "1" ]] || ! grep -q 'Refusing to start' "$LOG"; then
+    echo "[$label] FAIL: expected exit 1 with 'Refusing to start', got $code"; cat "$LOG"; exit 1
+  fi
+  echo "[$label] OK: refused to start"
+}
+
 check dev env NODE_ENV=development node_modules/.bin/tsx server.ts
 npm run build
-check prod env NODE_ENV=production node dist/server.js
+# The local .env uses OTP_MODE=dev; production only accepts it with the explicit demo override.
+STRONG_SECRET="smoke-$(node -e "console.log(require('crypto').randomBytes(24).toString('hex'))")"
+check prod env NODE_ENV=production PICKUP_CODE_SECRET="$STRONG_SECRET" OTP_MODE=dev ALLOW_DEV_OTP_IN_PRODUCTION=1 node dist/server.js
+refuses prod-dev-otp env NODE_ENV=production PICKUP_CODE_SECRET="$STRONG_SECRET" OTP_MODE=dev ALLOW_DEV_OTP_IN_PRODUCTION= node dist/server.js
+refuses prod-weak-secret env NODE_ENV=production PICKUP_CODE_SECRET=change-me-32-bytes-minimum OTP_MODE=sms node dist/server.js
 echo "smoke: all OK"

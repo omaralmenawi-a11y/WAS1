@@ -3,6 +3,8 @@ import next from 'next';
 import { Server } from 'socket.io';
 import { attachRealtime, setIo } from './src/lib/realtime';
 import { closeStaleRequests } from './src/lib/pickup/service';
+import { assertPickupCodeSecret } from './src/lib/pickup/code';
+import { checkProductionEnv } from './src/lib/env-check';
 
 const STALE_SWEEP_MS = 10 * 60_000;
 
@@ -18,7 +20,23 @@ const port = Number(process.env.PORT ?? 3000);
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
+/** Refuses to start (exit 1) on unsafe configuration; runs after Next has loaded .env files. */
+function checkEnvOrExit(): void {
+  const { errors, warnings } = checkProductionEnv(process.env);
+  try {
+    assertPickupCodeSecret();
+  } catch (e) {
+    errors.push((e as Error).message);
+  }
+  for (const w of warnings) console.warn(`\n!!! WARNING: ${w}\n`);
+  if (errors.length) {
+    for (const e of new Set(errors)) console.error(`Refusing to start: ${e}`);
+    process.exit(1);
+  }
+}
+
 app.prepare().then(() => {
+  checkEnvOrExit();
   const httpServer = createServer((req, res) => handle(req, res));
   const io = new Server(httpServer, { path: '/socket.io' });
   setIo(io);

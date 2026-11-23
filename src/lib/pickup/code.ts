@@ -1,9 +1,13 @@
 import { createHmac } from 'node:crypto';
 
+/** Called by server.ts at startup so a missing secret fails the boot, not the first pickup. */
+export function assertPickupCodeSecret(env: Record<string, string | undefined> = process.env): void {
+  if (!env.PICKUP_CODE_SECRET) throw new Error('PICKUP_CODE_SECRET is not set');
+}
+
 function secretOf(): string {
-  const s = process.env.PICKUP_CODE_SECRET;
-  if (!s) throw new Error('PICKUP_CODE_SECRET is not set');
-  return s;
+  assertPickupCodeSecret();
+  return process.env.PICKUP_CODE_SECRET!;
 }
 
 const windowOf = (at: Date) => Math.floor(at.getTime() / 1000 / 60);

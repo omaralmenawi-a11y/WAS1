@@ -46,6 +46,8 @@ npm run dev                 # http://localhost:3000
 
 مع `OTP_MODE=dev` لا تُرسل رسائل. يظهر الرمز في سجل الخادم، وفي صفحة `/admin` (سجّل دخولك بحساب `root`) تحت «رموز التحقق — وضع التطوير».
 
+في وضع الإنتاج (`NODE_ENV=production`) يرفض الخادم البدء إذا كان `PICKUP_CODE_SECRET` مفقوداً أو أقصر من 32 حرفاً أو يبدأ بـ `change-me`، أو إذا كان `OTP_MODE=dev` ما لم يُضبط `ALLOW_DEV_OTP_IN_PRODUCTION=1` (للعرض التجريبي فقط، مع تحذير في السجل).
+
 ## الاختبارات
 
 ```bash
@@ -106,6 +108,8 @@ npm run dev                 # http://localhost:3000
 ## OTP codes in dev
 
 With `OTP_MODE=dev` nothing is sent. Codes are written to the server log and listed on `/admin` (sign in as `root`) under the dev OTP section.
+
+With `NODE_ENV=production` the server refuses to start when `PICKUP_CODE_SECRET` is missing, shorter than 32 characters or starts with `change-me`, or when `OTP_MODE=dev` unless `ALLOW_DEV_OTP_IN_PRODUCTION=1` is set (demo only; a warning is logged).
 
 ## Tests
 
