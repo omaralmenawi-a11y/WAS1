@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Role, User } from '@prisma/client';
 import { prisma } from '../db';
+import { unsubscribe } from '../notify/subscriptions';
 import { now } from '../time';
 
 const HOUR = 3_600_000;
@@ -32,4 +33,17 @@ export async function destroySession(token: string): Promise<void> {
 /** Ends every session of the user except the one holding keepToken (all of them when it is absent). */
 export async function destroyOtherSessions(userId: string, keepToken?: string): Promise<void> {
   await prisma.session.deleteMany({ where: { userId, ...(keepToken ? { tokenHash: { not: sha256(keepToken) } } : {}) } });
+}
+
+/** Logout: best-effort drop of this device's push subscription (only if the session's user owns it), then the session. */
+export async function logoutDevice(token: string, endpoint?: unknown): Promise<void> {
+  if (typeof endpoint === 'string' && endpoint) {
+    try {
+      const user = await getSessionUser(token);
+      if (user) await unsubscribe(user, endpoint);
+    } catch (e) {
+      console.error('logout unsubscribe failed', e);
+    }
+  }
+  await destroySession(token);
 }

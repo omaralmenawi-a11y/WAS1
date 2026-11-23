@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { prisma } from '../../src/lib/db';
 import { issueOtp, verifyOtp } from '../../src/lib/auth/otp';
 import { changePassword, registerGuardian, login, resetPassword } from '../../src/lib/auth/accounts';
-import { createSession, getSessionUser } from '../../src/lib/auth/session';
+import { createSession, getSessionUser, logoutDevice } from '../../src/lib/auth/session';
 import { Conflict, InvalidCredentials, RateLimitError, ValidationError } from '../../src/lib/errors';
 
 const PHONE = '+966501234567';
@@ -110,6 +110,26 @@ describe('accounts', () => {
     expect((await prisma.pushSubscription.findMany({ orderBy: { endpoint: 'asc' } })).map((s) => s.endpoint)).toEqual(['https://e/2', 'https://e/3']);
     await changePassword(u.id, 'newpassword1', 'newpassword2');
     expect((await prisma.pushSubscription.findMany()).map((s) => s.endpoint)).toEqual(['https://e/3']);
+  });
+
+  it("logout drops only the logging-out user's own endpoint, then the session", async () => {
+    const u = await prisma.user.create({ data: { role: 'GUARDIAN', name: 'u', passwordHash: 'h' } });
+    const o = await prisma.user.create({ data: { role: 'GUARDIAN', name: 'o', passwordHash: 'h' } });
+    for (const [userId, endpoint] of [[u.id, 'https://e/mine'], [u.id, 'https://e/mine2'], [o.id, 'https://e/other']]) {
+      await prisma.pushSubscription.create({ data: { userId, endpoint, p256dh: 'p', auth: 'a' } });
+    }
+    const t1 = await createSession(u.id, 'GUARDIAN');
+    await logoutDevice(t1, 'https://e/other'); // another user's endpoint in the body
+    expect(await prisma.pushSubscription.count()).toBe(3);
+    expect(await getSessionUser(t1)).toBeNull();
+    const t2 = await createSession(u.id, 'GUARDIAN');
+    await logoutDevice(t2, 'https://e/mine');
+    expect((await prisma.pushSubscription.findMany({ orderBy: { endpoint: 'asc' } })).map((s) => s.endpoint)).toEqual(['https://e/mine2', 'https://e/other']);
+    const t3 = await createSession(u.id, 'GUARDIAN');
+    await logoutDevice(t3);
+    await logoutDevice('garbage', 'https://e/mine2'); // no session: nothing deleted
+    expect(await prisma.pushSubscription.count()).toBe(2);
+    expect(await prisma.session.count()).toBe(0);
   });
 
   it('session lifetime', async () => {
