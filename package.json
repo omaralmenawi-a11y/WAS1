@@ -10,6 +10,7 @@
     "test:int": "vitest run --project integration",
     "e2e": "playwright test",
     "db:migrate": "prisma migrate dev",
+    "create-platform-admin": "tsx scripts/create-platform-admin.ts",
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
