@@ -192,8 +192,9 @@ function VerifyPanel({ list, verified, setVerified }: { list: StaffRequestView[]
   const prevReady = useRef<string[]>([]);
   useEffect(() => {
     const ids = readyKey ? readyKey.split(',') : [];
-    setPicked((p) => syncPicked(p, prevReady.current, ids));
+    const prev = prevReady.current; // capture now: the updater below runs after the ref is reassigned
     prevReady.current = ids;
+    setPicked((p) => syncPicked(p, prev, ids));
   }, [readyKey]);
   useEffect(() => {
     if (!verified) prevReady.current = [];
