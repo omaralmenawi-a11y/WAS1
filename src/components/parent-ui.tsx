@@ -12,21 +12,28 @@ export function LogoutButton() {
 
 const HINT_KEY = 'wasl_ios_hint_dismissed';
 
+/** True on iOS Safari when the app is not installed to the home screen. */
+export function iosNeedsInstall(): boolean {
+  try {
+    const ua = navigator.userAgent;
+    const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const safari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+    const standalone = (navigator as unknown as { standalone?: boolean }).standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+    return ios && safari && !standalone;
+  } catch {
+    return false;
+  }
+}
+
 /** iOS Safari only, not installed, dismissible. */
 export function IosInstallHint() {
   const [show, setShow] = useState(false);
   useEffect(() => {
+    let dismissed = false;
     try {
-      const ua = navigator.userAgent;
-      const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-      const safari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
-      const standalone = (navigator as unknown as { standalone?: boolean }).standalone === true || window.matchMedia('(display-mode: standalone)').matches;
-      let dismissed = false;
-      try {
-        dismissed = localStorage.getItem(HINT_KEY) === '1';
-      } catch {}
-      setShow(ios && safari && !standalone && !dismissed);
+      dismissed = localStorage.getItem(HINT_KEY) === '1';
     } catch {}
+    setShow(iosNeedsInstall() && !dismissed);
   }, []);
   if (!show) return null;
   return (

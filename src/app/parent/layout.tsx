@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { requirePageUser } from '@/lib/auth/guard';
 import { IosInstallHint, LogoutButton } from '@/components/parent-ui';
+import { PushToggle } from '@/components/PushToggle';
+import { NotificationBell } from '@/components/NotificationBell';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,11 +17,13 @@ export default async function Layout({ children }: { children: React.ReactNode }
         </Link>
         <nav className="flex items-center gap-3 text-sm">
           <Link href="/parent/history" className="opacity-90 hover:opacity-100">السجل</Link>
+          <NotificationBell />
           <LogoutButton />
         </nav>
       </header>
       <main className="flex-1 space-y-3 p-4">
         <IosInstallHint />
+        <PushToggle />
         {children}
       </main>
     </div>

@@ -36,10 +36,29 @@ export function resetSocket(): void {
   }
 }
 
+/** Best-effort: unsubscribe this device from push within 1.5 s; never throws. Returns its endpoint. */
+async function dropPushSubscription(): Promise<string | undefined> {
+  const work = (async () => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return undefined;
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager?.getSubscription();
+    if (!sub) return undefined;
+    const endpoint = sub.endpoint;
+    sub.unsubscribe().catch(() => {});
+    return endpoint;
+  })().catch(() => undefined);
+  return Promise.race([work, new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500))]);
+}
+
 /** Log out, drop the socket and reload so no rooms or state of the previous user survive. */
 export async function logout(redirect = '/login'): Promise<void> {
   try {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    const endpoint = await dropPushSubscription();
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(endpoint ? { endpoint } : {}),
+    });
   } finally {
     resetSocket();
     window.location.assign(redirect);
