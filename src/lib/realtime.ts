@@ -2,29 +2,17 @@ import type { Server, Socket } from 'socket.io';
 import { prisma } from './db';
 import { getSessionUser } from './auth/session';
 import { assertBranchAccess } from './authz';
-import { SESSION_COOKIE } from './http';
+import { parseCookie, SESSION_COOKIE } from './cookies';
 import { loadRequestForViews, toBoardEntry, toOwnerView, toStaffView } from './pickup/views';
+
+// Must not import next/headers or next/navigation (directly or transitively): server.ts loads this
+// before next().prepare(), and doing so crashes the first page request (see tests/unit/server-imports.test.ts).
 
 type G = typeof globalThis & { __waslIo?: Server };
 
 /** server.ts (compiled separately) stores the io handle on globalThis so bundled Next code can reach it. */
 export function setIo(io: Server | undefined): void {
   (globalThis as G).__waslIo = io;
-}
-
-function cookieValue(header: string | undefined, name: string): string | undefined {
-  if (!header) return undefined;
-  for (const part of header.split(';')) {
-    const i = part.indexOf('=');
-    if (i > 0 && part.slice(0, i).trim() === name) {
-      try {
-        return decodeURIComponent(part.slice(i + 1).trim());
-      } catch {
-        return undefined;
-      }
-    }
-  }
-  return undefined;
 }
 
 export function attachRealtime(io: Server): void {
@@ -38,7 +26,7 @@ export function attachRealtime(io: Server): void {
           return next();
         }
       }
-      const user = await getSessionUser(cookieValue(socket.handshake.headers.cookie, SESSION_COOKIE));
+      const user = await getSessionUser(parseCookie(socket.handshake.headers.cookie, SESSION_COOKIE));
       if (user) socket.data.user = user;
       next();
     } catch (e) {

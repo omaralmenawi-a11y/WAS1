@@ -13,6 +13,7 @@ npm run dev                       # http://localhost:3000
 
 - الاختبارات: `npm test` (وحدة) و`npm run test:int` (تكامل، قاعدة `wasl_test`).
 - البناء: `npm run build` ثم `npm start`.
+- فحص الخادم (smoke): `npm run smoke` يشغّل `server.ts` في وضع التطوير ثم يبني ويشغّل `dist/server.js` في وضع الإنتاج على منفذ عشوائي، ويتوقع 200 من `/login`. شغّله بعد أي تغيير في `server.ts` أو في وحدات المقبس (`src/lib/realtime.ts` وما تستورده)، فهذه يجب ألا تستورد `next/headers` أو `next/navigation`.
 
 ## Security
 

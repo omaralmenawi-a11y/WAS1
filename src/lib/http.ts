@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { AppError } from './errors';
+import { SESSION_COOKIE } from './cookies';
 
-export const SESSION_COOKIE = 'wasl_session';
+export { SESSION_COOKIE };
 
 export function errorResponse(e: unknown): Response {
   if (e instanceof AppError) {

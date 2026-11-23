@@ -8,6 +8,7 @@
     "start": "NODE_ENV=production node dist/server.js",
     "test": "vitest run --project unit --passWithNoTests",
     "test:int": "vitest run --project integration",
+    "smoke": "bash scripts/smoke.sh",
     "e2e": "playwright test",
     "db:migrate": "prisma migrate dev",
     "create-platform-admin": "tsx scripts/create-platform-admin.ts",
