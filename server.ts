@@ -1,0 +1,15 @@
+import { createServer } from 'node:http';
+import next from 'next';
+import { Server } from 'socket.io';
+
+const dev = process.env.NODE_ENV !== 'production';
+const port = Number(process.env.PORT ?? 3000);
+const app = next({ dev });
+const handle = app.getRequestHandler();
+
+app.prepare().then(() => {
+  const httpServer = createServer((req, res) => handle(req, res));
+  const io = new Server(httpServer, { path: '/socket.io' });
+  (globalThis as { io?: Server }).io = io;
+  httpServer.listen(port, () => console.log(`> WASL ready on http://localhost:${port}`));
+});

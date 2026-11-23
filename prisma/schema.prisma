@@ -1,0 +1,218 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PLATFORM_ADMIN
+  SCHOOL_ADMIN
+  STAFF
+  GUARDIAN
+  DELEGATE
+}
+
+enum ItemStatus {
+  EN_ROUTE
+  PREPARING
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+model School {
+  id            String    @id @default(cuid())
+  name          String
+  weekDays      Int[]     @default([0, 1, 2, 3, 4])
+  pickupLeadMin Int       @default(60)
+  pickupTailMin Int       @default(180)
+  etaSpeedKmh   Int       @default(30)
+  createdAt     DateTime  @default(now())
+  branches      Branch[]
+  holidays      Holiday[]
+  students      Student[]
+}
+
+model Branch {
+  id         String      @id @default(cuid())
+  schoolId   String
+  name       String
+  boardToken String      @unique
+  school     School      @relation(fields: [schoolId], references: [id])
+  gates      Gate[]
+  classrooms Classroom[]
+  students   Student[]
+}
+
+model Gate {
+  id       String @id @default(cuid())
+  branchId String
+  name     String
+  branch   Branch @relation(fields: [branchId], references: [id])
+}
+
+model Classroom {
+  id        String          @id @default(cuid())
+  branchId  String
+  name      String
+  grade     String
+  branch    Branch          @relation(fields: [branchId], references: [id])
+  schedules ClassSchedule[]
+  students  Student[]
+}
+
+model ClassSchedule {
+  id          String    @id @default(cuid())
+  classroomId String
+  weekday     Int
+  dismissal   String // "HH:MM"
+  classroom   Classroom @relation(fields: [classroomId], references: [id])
+
+  @@unique([classroomId, weekday])
+}
+
+model Holiday {
+  id       String   @id @default(cuid())
+  schoolId String
+  branchId String?
+  date     DateTime @db.Date
+  note     String
+  school   School   @relation(fields: [schoolId], references: [id])
+}
+
+model ScheduleOverride {
+  id          String   @id @default(cuid())
+  branchId    String
+  classroomId String?
+  date        DateTime @db.Date
+  dismissal   String
+}
+
+model Student {
+  id            String          @id @default(cuid())
+  schoolId      String
+  branchId      String
+  classroomId   String
+  defaultGateId String
+  externalId    String?
+  fullName      String
+  active        Boolean         @default(true)
+  school        School          @relation(fields: [schoolId], references: [id])
+  branch        Branch          @relation(fields: [branchId], references: [id])
+  classroom     Classroom       @relation(fields: [classroomId], references: [id])
+  phones        GuardianPhone[]
+  items         PickupItem[]
+
+  @@unique([schoolId, externalId])
+}
+
+model GuardianPhone {
+  id        String  @id @default(cuid())
+  studentId String
+  phone     String
+  relation  String?
+  student   Student @relation(fields: [studentId], references: [id])
+
+  @@unique([studentId, phone])
+}
+
+model User {
+  id                 String    @id @default(cuid())
+  role               Role
+  schoolId           String?
+  branchId           String?
+  gateIds            String[]
+  name               String
+  username           String?   @unique
+  phone              String?   @unique
+  email              String?   @unique
+  passwordHash       String
+  mustChangePassword Boolean   @default(false)
+  photoKey           String?
+  createdAt          DateTime  @default(now())
+  sessions           Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model OtpCode {
+  id         String    @id @default(cuid())
+  identifier String
+  purpose    String // REGISTER | RESET | LINK_PHONE
+  codeHash   String
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  devVisible String?
+  createdAt  DateTime  @default(now())
+}
+
+model Delegation {
+  id         String   @id @default(cuid())
+  guardianId String
+  delegateId String?
+  name       String
+  phone      String
+  studentIds String[]
+  status     String // PENDING | APPROVED | REVOKED
+  createdAt  DateTime @default(now())
+}
+
+model PickupRequest {
+  id           String       @id @default(cuid())
+  schoolId     String
+  branchId     String
+  gateId       String
+  number       Int
+  day          DateTime     @db.Date
+  requesterId  String
+  open         Boolean      @default(true)
+  lat          Float?
+  lng          Float?
+  locationAt   DateTime?
+  etaSeconds   Int?
+  arrivedAt    DateTime?
+  verifiedAt   DateTime?
+  verifiedById String?
+  verifyMethod String?
+  createdAt    DateTime     @default(now())
+  closedAt     DateTime?
+  items        PickupItem[]
+
+  @@unique([branchId, day, number])
+}
+
+model PickupItem {
+  id            String        @id @default(cuid())
+  requestId     String
+  studentId     String
+  status        ItemStatus
+  preparingAt   DateTime?
+  readyAt       DateTime?
+  deliveredAt   DateTime?
+  deliveredById String?
+  cancelledAt   DateTime?
+  cancelReason  String?
+  request       PickupRequest @relation(fields: [requestId], references: [id])
+  student       Student       @relation(fields: [studentId], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  schoolId  String?
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String
+  data      Json
+  createdAt DateTime @default(now())
+}
