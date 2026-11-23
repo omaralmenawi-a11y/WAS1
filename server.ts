@@ -4,7 +4,7 @@ import { Server } from 'socket.io';
 import { attachRealtime, setIo } from './src/lib/realtime';
 import { closeStaleRequests } from './src/lib/pickup/service';
 import { assertPickupCodeSecret } from './src/lib/pickup/code';
-import { checkProductionEnv } from './src/lib/env-check';
+import { checkProductionEnv, webPushStatus } from './src/lib/env-check';
 import { runDismissalNotifications } from './src/lib/notify/dismissal';
 
 const STALE_SWEEP_MS = 10 * 60_000;
@@ -47,6 +47,7 @@ function checkEnvOrExit(): void {
     errors.push((e as Error).message);
   }
   for (const w of warnings) console.warn(`\n!!! WARNING: ${w}\n`);
+  console.log(webPushStatus(process.env));
   if (errors.length) {
     for (const e of new Set(errors)) console.error(`Refusing to start: ${e}`);
     process.exit(1);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkProductionEnv } from '../../src/lib/env-check';
+import { checkProductionEnv, webPushStatus } from '../../src/lib/env-check';
 import { assertPickupCodeSecret } from '../../src/lib/pickup/code';
 
 const GOOD = 'x'.repeat(32);
@@ -15,6 +15,13 @@ describe('checkProductionEnv', () => {
     const r = prod({ PICKUP_CODE_SECRET: GOOD, OTP_MODE: 'sms' });
     expect(r.errors).toEqual([]);
     expect(r.warnings).toContain('Web Push disabled: VAPID keys missing');
+  });
+
+  it('warns when VAPID_SUBJECT is set but is not mailto: or https:', () => {
+    const r = prod({ PICKUP_CODE_SECRET: GOOD, OTP_MODE: 'sms', ...VAPID, VAPID_SUBJECT: 'admin@school.sa' });
+    expect(r.errors).toEqual([]);
+    expect(r.warnings).toEqual(['Web Push disabled: VAPID_SUBJECT must start with mailto: or https:']);
+    expect(prod({ PICKUP_CODE_SECRET: GOOD, OTP_MODE: 'sms', ...VAPID, VAPID_SUBJECT: 'https://school.sa' }).warnings).toEqual([]);
   });
 
   it('refuses a missing, short or placeholder pickup secret', () => {
@@ -42,6 +49,14 @@ describe('checkProductionEnv', () => {
   it('checks nothing outside production', () => {
     expect(checkProductionEnv({ NODE_ENV: 'development', OTP_MODE: 'dev' })).toEqual({ errors: [], warnings: [] });
     expect(checkProductionEnv({})).toEqual({ errors: [], warnings: [] });
+  });
+});
+
+describe('webPushStatus (logged once at startup, all modes)', () => {
+  it('says enabled or disabled', () => {
+    expect(webPushStatus(VAPID)).toBe('Web Push enabled');
+    expect(webPushStatus({})).toBe('Web Push disabled');
+    expect(webPushStatus({ ...VAPID, VAPID_SUBJECT: 'x@y.z' })).toBe('Web Push disabled');
   });
 });
 

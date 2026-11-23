@@ -5,6 +5,15 @@ export type EnvCheck = { errors: string[]; warnings: string[] };
 
 const MIN_SECRET = 32;
 
+/** web-push accepts only these VAPID subjects. */
+export const VAPID_SUBJECT_RE = /^(mailto:|https:)/;
+
+/** One startup line: whether Web Push will send (all three VAPID values set and a valid subject). */
+export function webPushStatus(env: Env): string {
+  const on = !!env.VAPID_PUBLIC_KEY && !!env.VAPID_PRIVATE_KEY && !!env.VAPID_SUBJECT && VAPID_SUBJECT_RE.test(env.VAPID_SUBJECT);
+  return on ? 'Web Push enabled' : 'Web Push disabled';
+}
+
 /** Production refuses to start with a weak pickup-code secret or with dev OTP (unless explicitly allowed). */
 export function checkProductionEnv(env: Env): EnvCheck {
   const errors: string[] = [];
@@ -26,6 +35,8 @@ export function checkProductionEnv(env: Env): EnvCheck {
 
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !env.VAPID_SUBJECT) {
     warnings.push('Web Push disabled: VAPID keys missing');
+  } else if (!VAPID_SUBJECT_RE.test(env.VAPID_SUBJECT)) {
+    warnings.push('Web Push disabled: VAPID_SUBJECT must start with mailto: or https:');
   }
   return { errors, warnings };
 }

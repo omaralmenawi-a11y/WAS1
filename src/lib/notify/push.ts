@@ -1,4 +1,5 @@
 import * as webpush from 'web-push';
+import { VAPID_SUBJECT_RE } from '../env-check';
 
 // Must not import next/headers or next/navigation: reachable from server.ts (see tests/unit/server-imports.test.ts).
 
@@ -36,7 +37,7 @@ function fromEnv(): PushSender | null {
   const pub = process.env.VAPID_PUBLIC_KEY;
   const priv = process.env.VAPID_PRIVATE_KEY;
   const subject = process.env.VAPID_SUBJECT;
-  envSender = pub && priv && subject && /^(mailto:|https:)/.test(subject) ? new WebPushSender(pub, priv, subject) : null;
+  envSender = pub && priv && subject && VAPID_SUBJECT_RE.test(subject) ? new WebPushSender(pub, priv, subject) : null;
   return envSender;
 }
 
