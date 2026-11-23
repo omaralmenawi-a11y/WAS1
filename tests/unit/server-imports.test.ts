@@ -17,4 +17,8 @@ describe('socket layer imported by server.ts', () => {
     expect(typeof mod.attachRealtime).toBe('function');
     expect(typeof mod.setIo).toBe('function');
   });
+  it('pickup service (stale sweep) does not import them either', async () => {
+    const mod = await import('@/lib/pickup/service');
+    expect(typeof mod.closeStaleRequests).toBe('function');
+  });
 });

@@ -123,6 +123,34 @@ export async function announceRevoked(requestIds: string[]): Promise<void> {
   }
 }
 
+const DAY_ENDED = 'انتهى اليوم الدراسي';
+
+/** Cancels the active items of an open request of an earlier day and closes it (clears location). */
+async function autoCloseStale(tx: Tx, requestId: string, actorId: string | null, at: Date): Promise<boolean> {
+  const cur = await lockRequest(tx, requestId);
+  if (!cur.open || cur.day >= dayDate(at)) return false;
+  await tx.pickupItem.updateMany({
+    where: { requestId, status: { in: ACTIVE } },
+    data: { status: 'CANCELLED', cancelledAt: at, cancelReason: DAY_ENDED },
+  });
+  await closeIfDone(tx, requestId, at);
+  await writeAudit({ schoolId: cur.schoolId, actorId, action: 'PICKUP_AUTO_CLOSED', entity: 'PickupRequest', entityId: requestId, data: { branchId: cur.branchId } }, tx);
+  return true;
+}
+
+/** Sweep (server start + every 10 min): closes every open request of an earlier Riyadh day. Returns how many. */
+export async function closeStaleRequests(at: Date = now()): Promise<number> {
+  const stale = await prisma.pickupRequest.findMany({ where: { open: true, day: { lt: dayDate(at) } }, select: { id: true }, orderBy: { id: 'asc' } });
+  let n = 0;
+  for (const { id } of stale) {
+    const closed = await prisma.$transaction((tx) => autoCloseStale(tx, id, null, at));
+    if (!closed) continue;
+    n++;
+    await emitPickupChanged(id);
+  }
+  return n;
+}
+
 export async function createRequest(user: User, studentIds: string[], at: Date = now()) {
   if (user.role !== 'GUARDIAN') throw new Forbidden();
   const ids = [...new Set(studentIds)];
@@ -145,6 +173,7 @@ export async function createRequest(user: User, studentIds: string[], at: Date =
   const youngest = [...students].sort((a, b) => a.classroom.grade.localeCompare(b.classroom.grade, 'ar', { numeric: true }))[0];
   const day = dayDate(at);
 
+  let autoClosed: string[] = [];
   for (let attempt = 1; ; attempt++) {
     try {
       const request = await prisma.$transaction(async (tx) => {
@@ -153,15 +182,8 @@ export async function createRequest(user: User, studentIds: string[], at: Date =
           select: { id: true, schoolId: true, branchId: true },
           orderBy: { id: 'asc' },
         });
-        for (const st of stale) {
-          await lockRequest(tx, st.id);
-          await tx.pickupItem.updateMany({
-            where: { requestId: st.id, status: { in: ACTIVE } },
-            data: { status: 'CANCELLED', cancelledAt: at, cancelReason: 'انتهى اليوم الدراسي' },
-          });
-          await closeIfDone(tx, st.id, at);
-          await writeAudit({ schoolId: st.schoolId, actorId: user.id, action: 'PICKUP_AUTO_CLOSED', entity: 'PickupRequest', entityId: st.id, data: { branchId: st.branchId } }, tx);
-        }
+        autoClosed = [];
+        for (const st of stale) if (await autoCloseStale(tx, st.id, user.id, at)) autoClosed.push(st.id);
         const busy = await tx.pickupItem.findFirst({
           where: { studentId: { in: ids }, status: { in: ACTIVE } },
           include: { student: { select: { fullName: true } }, request: { select: { requesterId: true } } },
@@ -190,6 +212,7 @@ export async function createRequest(user: User, studentIds: string[], at: Date =
         );
         return created;
       });
+      for (const id of autoClosed) await emitPickupChanged(id);
       await emitPickupChanged(request.id);
       return request;
     } catch (e) {

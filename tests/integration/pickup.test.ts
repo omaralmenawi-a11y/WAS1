@@ -4,7 +4,8 @@ import { createSchoolWithAdmin } from '../../src/lib/admin/schools';
 import { createClassroom, createGate, setClassSchedule, updateBranch } from '../../src/lib/school/setup';
 import { applyImport } from '../../src/lib/school/import';
 import { setStudentActive, updateStudent } from '../../src/lib/school/students';
-import { advanceItem, cancelRequest, changeGate, createRequest, deliverItems, markArrived, updateLocation, verifyRecipient } from '../../src/lib/pickup/service';
+import { advanceItem, cancelRequest, changeGate, closeStaleRequests, createRequest, deliverItems, markArrived, updateLocation, verifyRecipient } from '../../src/lib/pickup/service';
+import { setIo } from '../../src/lib/realtime';
 import { getOwnPickupCode, listOwnRequests } from '../../src/lib/pickup/own';
 import { checkPickupCode, pickupCode, qrPayload } from '../../src/lib/pickup/code';
 import { Conflict, Forbidden, NotFound, RateLimitError, ValidationError } from '../../src/lib/errors';
@@ -353,6 +354,48 @@ describe('concurrency and stale requests', () => {
     const item = await prisma.pickupItem.findFirstOrThrow({ where: { requestId: old.id } });
     expect(item).toMatchObject({ status: 'CANCELLED', cancelReason: 'انتهى اليوم الدراسي' });
     expect(await prisma.auditLog.count({ where: { action: 'PICKUP_AUTO_CLOSED' } })).toBe(1);
+  });
+
+  /** Fake socket server recording request ids of 'pickup:changed' events. */
+  function recordEmits() {
+    const ids: string[] = [];
+    setIo({ to: () => ({ emit: (ev: string, v: { id?: string }) => { if (ev === 'pickup:changed' && v.id) ids.push(v.id); } }) } as any);
+    return ids;
+  }
+
+  it('createRequest emits a change for requests it auto-closes', async () => {
+    const { a, g } = await setup();
+    const old = await createRequest(g, [a.id], new Date(T.getTime() - 24 * 3600_000));
+    const emitted = recordEmits();
+    try {
+      await createRequest(g, [a.id], T);
+    } finally {
+      setIo(undefined);
+    }
+    expect(emitted).toContain(old.id);
+  });
+
+  it('closeStaleRequests sweeps open requests of earlier days only', async () => {
+    const { a, b, g, s } = await setup();
+    const yesterday = new Date(T.getTime() - 24 * 3600_000);
+    const old = await createRequest(g, [a.id], yesterday);
+    await prisma.pickupRequest.update({ where: { id: old.id }, data: { lat: 1, lng: 2, locationAt: yesterday, etaSeconds: 9 } });
+    const today = await createRequest(g, [b.id], T);
+    const emitted = recordEmits();
+    let n: number;
+    try {
+      n = await closeStaleRequests(T);
+    } finally {
+      setIo(undefined);
+    }
+    expect(n).toBe(1);
+    expect([...new Set(emitted)]).toEqual([old.id]);
+    await expectClosed(old.id);
+    expect(await prisma.pickupItem.findFirstOrThrow({ where: { requestId: old.id } })).toMatchObject({ status: 'CANCELLED', cancelReason: 'انتهى اليوم الدراسي' });
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { action: 'PICKUP_AUTO_CLOSED', entityId: old.id } });
+    expect(audit).toMatchObject({ schoolId: s.school.id, actorId: null, data: { branchId: s.branch.id } });
+    expect((await prisma.pickupRequest.findUniqueOrThrow({ where: { id: today.id } })).open).toBe(true);
+    expect(await closeStaleRequests(T)).toBe(0); // idempotent
   });
 
   it('verify and deliver reject a request from another day', async () => {
