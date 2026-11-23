@@ -8,3 +8,15 @@ body {
 h1, h2, h3 {
   @apply font-heading;
 }
+
+/* Public board: a freshly READY tile gets a white ring for 5 s (the page removes the class). */
+.board-fresh {
+  box-shadow: 0 0 0 6px #fff, 0 0 40px 8px rgba(255, 255, 255, 0.55);
+  animation: board-pulse 1s ease-in-out infinite;
+}
+@keyframes board-pulse {
+  50% { transform: scale(1.04); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-fresh { animation: none; }
+}

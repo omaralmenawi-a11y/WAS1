@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+// /board and /api/board are public by design (token-only, no names) and are not matched below.
 // Edge middleware cannot reach the DB: it only checks the cookie is present.
 // Real validation happens in the layouts (requirePageUser) and API routes.
 export function middleware(req: NextRequest) {
