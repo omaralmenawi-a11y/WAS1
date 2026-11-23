@@ -6,7 +6,8 @@ import { applyImport } from '../../src/lib/school/import';
 import { advanceItem, cancelRequest, changeGate, createRequest, deliverItems, markArrived, updateLocation, verifyRecipient } from '../../src/lib/pickup/service';
 import { getOwnPickupCode, listOwnRequests } from '../../src/lib/pickup/own';
 import { checkPickupCode, pickupCode, qrPayload } from '../../src/lib/pickup/code';
-import { Conflict, NotFound, RateLimitError, ValidationError } from '../../src/lib/errors';
+import { Conflict, Forbidden, NotFound, RateLimitError, ValidationError } from '../../src/lib/errors';
+import { listStaffRequests } from '../../src/lib/pickup/staff';
 import type { User } from '@prisma/client';
 
 process.env.PICKUP_CODE_SECRET ||= 'test-secret';
@@ -206,6 +207,25 @@ describe('lifecycle', () => {
     expect(await prisma.auditLog.count({ where: { action: 'GATE_CHANGED' } })).toBe(1);
     const s2 = await mkSchool('b');
     await expect(changeGate(staff, r.id, s2.gate.id, T)).rejects.toThrow(NotFound);
+  });
+});
+
+describe('platform admin', () => {
+  it('cannot run pickup mutations but can still list requests', async () => {
+    const { a, g, s, staff } = await setup();
+    const root = await prisma.user.create({ data: { role: 'PLATFORM_ADMIN', name: 'root', passwordHash: 'x', username: 'root_pa' } });
+    const r = await createRequest(g, [a.id], T);
+    const itemId = r.items[0].id;
+    await expect(advanceItem(root, itemId, 'PREPARE', T)).rejects.toThrow(Forbidden);
+    await advanceItem(staff, itemId, 'PREPARE', T);
+    await advanceItem(staff, itemId, 'READY', T);
+    await expect(verifyRecipient(root, { qr: qrPayload(r.id, T) }, T)).rejects.toThrow(Forbidden);
+    await prisma.pickupRequest.update({ where: { id: r.id }, data: { verifiedAt: T } });
+    await expect(deliverItems(root, r.id, [itemId], T)).rejects.toThrow(Forbidden);
+    await expect(changeGate(root, r.id, s.gate2.id, T)).rejects.toThrow(Forbidden);
+    await expect(cancelRequest(root, r.id, 'سبب', T)).rejects.toThrow(Forbidden);
+    const list = await listStaffRequests(root, { branchId: s.branch.id }, T);
+    expect(list.map((x) => x.id)).toEqual([r.id]);
   });
 });
 

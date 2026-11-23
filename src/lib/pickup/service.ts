@@ -16,7 +16,8 @@ import { nextStatus } from './state';
 type Tx = Prisma.TransactionClient;
 
 const ACTIVE: ItemStatus[] = ['EN_ROUTE', 'PREPARING', 'READY'];
-const STAFF_ROLES: Role[] = ['STAFF', 'SCHOOL_ADMIN', 'PLATFORM_ADMIN'];
+// Pickup mutations: platform admins have read-only access (lists, dashboard).
+const STAFF_ROLES: Role[] = ['STAFF', 'SCHOOL_ADMIN'];
 const VERIFY_VALID_MS = 10 * 60_000;
 const VERIFY_FAIL_LIMIT = 10;
 const VERIFY_FAIL_WINDOW_MS = 5 * 60_000;
