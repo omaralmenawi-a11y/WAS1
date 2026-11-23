@@ -89,7 +89,8 @@ test('full pickup journey: register, request, prepare, ready, code, deliver', as
   await expect(codeBox).toHaveText(/^\d{6}$/);
   const pickupCode = (await codeBox.innerText()).trim();
 
-  // Staff verifies the code and delivers.
+  // Staff types the request number with the code (R8), verifies and delivers.
+  await staff.getByLabel('رقم الطلب').fill(number);
   await staff.getByLabel('رمز الاستلام').fill(pickupCode);
   await staff.getByRole('button', { name: 'تحقق' }).click();
   await expect(staff.getByRole('button', { name: 'تأكيد التسليم' })).toBeEnabled();

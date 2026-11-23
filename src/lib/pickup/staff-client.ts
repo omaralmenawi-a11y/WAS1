@@ -38,3 +38,27 @@ export function deliverable(picked: string[], ready: string[]): string[] {
 export function inStaffGates(view: { gateId: string }, gateIds: string[]): boolean {
   return gateIds.length === 0 || gateIds.includes(view.gateId);
 }
+
+/** QR scanner re-arm state: the camera decodes ~10 times a second, so one bad QR must not flood verification. */
+export type ScanGate = { paused: boolean; lastText: string | null; lastAt: number };
+export const SCAN_REPEAT_MS = 5000;
+
+export function newScanGate(): ScanGate {
+  return { paused: false, lastText: null, lastAt: 0 };
+}
+
+/** Whether a decoded text should be submitted: never while paused, nor an identical payload within 5 s. */
+export function admitScan(g: ScanGate, text: string, at: number): { gate: ScanGate; submit: boolean } {
+  if (g.paused) return { gate: g, submit: false };
+  if (g.lastText === text && at - g.lastAt < SCAN_REPEAT_MS) return { gate: g, submit: false };
+  return { gate: { paused: false, lastText: text, lastAt: at }, submit: true };
+}
+
+/** After a failed verification scanning stays paused until the staff taps «مسح مرة أخرى». */
+export function scanFailed(g: ScanGate): ScanGate {
+  return { ...g, paused: true };
+}
+
+export function resumeScan(_g: ScanGate): ScanGate {
+  return newScanGate();
+}

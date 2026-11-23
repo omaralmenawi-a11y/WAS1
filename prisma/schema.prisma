@@ -230,10 +230,11 @@ model LoginAttempt {
 }
 
 model VerifyAttempt {
-  id        String   @id @default(cuid())
-  staffId   String
-  ok        Boolean
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  staffId     String
+  ok          Boolean
+  payloadHash String? // SHA-256 of the submitted number+code or QR text (failures only)
+  createdAt   DateTime @default(now())
 
   @@index([staffId, createdAt])
 }

@@ -177,7 +177,7 @@ function RequestCard({ r, onChanged }: { r: StaffRequestView; onChanged: () => v
 
 function VerifyPanel({ list, verified, setVerified }: { list: StaffRequestView[]; verified: Verified | null; setVerified: (v: Verified | null) => void }) {
   const [code, setCode] = useState('');
-  const [requestId, setRequestId] = useState('');
+  const [number, setNumber] = useState('');
   const [scanning, setScanning] = useState(false);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -200,15 +200,19 @@ function VerifyPanel({ list, verified, setVerified }: { list: StaffRequestView[]
     if (!verified) prevReady.current = [];
   }, [verified]);
 
-  async function verify(body: Record<string, string>) {
+  /** Resolves true when the recipient was verified. */
+  async function verify(body: Record<string, string | number>): Promise<boolean> {
     setBusy(true);
     setErr('');
     try {
       setVerified(await call('/api/staff/verify', 'POST', body));
       setCode('');
+      setNumber('');
       setScanning(false);
+      return true;
     } catch (e) {
       setErr((e as Error).message);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -233,13 +237,16 @@ function VerifyPanel({ list, verified, setVerified }: { list: StaffRequestView[]
       <h2 className="font-heading text-base text-navy">التحقق من المستلم</h2>
       {!verified ? (
         <>
-          <select value={requestId} onChange={(e) => setRequestId(e.target.value)} aria-label="الطلب" className="mt-3 min-h-[44px] w-full rounded-lg border border-navy/20 bg-white px-3 text-sm">
-            <option value="">كل الطلبات</option>
-            {list.map((r) => (
-              <option key={r.id} value={r.id}>طلب {r.number} · {r.items.map((i) => i.studentName).join('، ')}</option>
-            ))}
-          </select>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-3 flex gap-2">
+            <input
+              value={number}
+              onChange={(e) => setNumber(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              inputMode="numeric"
+              dir="ltr"
+              placeholder="رقم الطلب"
+              aria-label="رقم الطلب"
+              className="min-h-[44px] w-28 rounded-lg border border-navy/20 px-3 text-center font-heading"
+            />
             <input
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
@@ -250,10 +257,10 @@ function VerifyPanel({ list, verified, setVerified }: { list: StaffRequestView[]
               aria-label="رمز الاستلام"
               className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-navy/20 px-3 text-center font-heading tracking-[0.3em]"
             />
-            <button type="button" className={primary} disabled={busy || code.length !== 6} onClick={() => verify({ code, ...(requestId ? { requestId } : {}) })}>
-              تحقق
-            </button>
           </div>
+          <button type="button" className={`${primary} mt-2 w-full`} disabled={busy || !number || code.length !== 6} onClick={() => verify({ requestNumber: Number(number), code })}>
+            تحقق
+          </button>
           <button type="button" className={`${secondary} mt-2 w-full`} onClick={() => setScanning((s) => !s)}>
             مسح QR
           </button>

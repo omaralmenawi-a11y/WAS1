@@ -121,7 +121,7 @@ describe('getDashboard', () => {
       const itemId = r.items[0].id;
       await advanceItem(staff, itemId, 'PREPARE', T);
       await advanceItem(staff, itemId, 'READY', T);
-      await verifyRecipient(staff, { code: pickupCode(r.id, T) }, T);
+      await verifyRecipient(staff, { requestNumber: r.number, code: pickupCode(r.id, T) }, T);
       await deliverItems(staff, r.id, [itemId], T);
       const c = await createRequest(cancelG, [cancelS], T);
       await cancelRequest(cancelG, c.id, undefined, T);

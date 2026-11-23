@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { Prisma, type ItemStatus, type PickupItem, type PickupRequest, type Role, type User } from '@prisma/client';
 import { prisma } from '../db';
@@ -184,7 +185,8 @@ export async function changeGate(staff: User, requestId: string, gateId: string,
   await emitPickupChanged(requestId);
 }
 
-type VerifyInput = { requestId?: string; code: string } | { qr: string };
+/** Code entry needs the request number too (R8): a 6-digit code alone could match another family. */
+type VerifyInput = { requestNumber: number; code: string; branchId?: string } | { qr: string };
 export type VerifyResult = {
   requestId: string;
   recipient: { name: string; role: Role; photoKey: string | null };
@@ -192,6 +194,7 @@ export type VerifyResult = {
 };
 
 const WRONG_CODE = 'الرمز غير صحيح';
+const REPEAT_WINDOW_MS = 60_000;
 
 export async function verifyRecipient(staff: User, input: VerifyInput, at: Date = now()): Promise<VerifyResult> {
   requireStaffLike(staff);
@@ -200,40 +203,43 @@ export async function verifyRecipient(staff: User, input: VerifyInput, at: Date 
     where: { staffId: staff.id, ok: false, createdAt: { gt: new Date(at.getTime() - VERIFY_FAIL_WINDOW_MS), lte: at } },
   });
   if (failures >= VERIFY_FAIL_LIMIT) throw new RateLimitError();
+  const payload = 'qr' in input ? `QR:${input.qr}` : `NUM:${input.requestNumber}:${input.code}`;
+  const payloadHash = createHash('sha256').update(payload).digest('hex');
   const fail = async (): Promise<never> => {
-    await prisma.verifyAttempt.create({ data: { staffId: staff.id, ok: false, createdAt: at } });
+    // A camera re-reading the same bad QR (or a double tap) within 60 s counts as one failure.
+    const repeat = await prisma.verifyAttempt.findFirst({
+      where: { staffId: staff.id, ok: false, payloadHash, createdAt: { gt: new Date(at.getTime() - REPEAT_WINDOW_MS), lte: at } },
+      select: { id: true },
+    });
+    if (!repeat) await prisma.verifyAttempt.create({ data: { staffId: staff.id, ok: false, payloadHash, createdAt: at } });
     throw new ValidationError(WRONG_CODE);
   };
 
   let requestId: string;
-  let code: string;
   let method: 'CODE' | 'QR';
-  let requested: string | undefined;
   if ('qr' in input) {
     const parsed = parseQr(input.qr);
     if (!parsed) return fail();
-    ({ requestId: requested, code } = parsed);
     method = 'QR';
-  } else {
-    requested = input.requestId;
-    code = input.code;
-    method = 'CODE';
-  }
-
-  if (requested) {
-    const req = await prisma.pickupRequest.findUnique({ where: { id: requested } });
+    const req = await prisma.pickupRequest.findUnique({ where: { id: parsed.requestId } });
     if (!req) return fail();
     await assertBranchAccess(staff, req.branchId);
     if (!isToday(req, at)) throw new ValidationError(STALE);
-    if (!req.open || !checkPickupCode(req.id, code, at)) return fail();
+    if (!req.open || !checkPickupCode(req.id, parsed.code, at)) return fail();
     requestId = req.id;
   } else {
-    if (!staff.branchId) throw new ValidationError('حدد الطلب لإدخال الرمز');
-    const open = await prisma.pickupRequest.findMany({ where: { branchId: staff.branchId, day: dayDate(at), open: true }, select: { id: true } });
-    const hits = open.filter((r) => checkPickupCode(r.id, code, at));
-    if (hits.length === 0) return fail();
-    if (hits.length > 1) throw new ValidationError('تعارض في الرمز، استخدم مسح QR');
-    requestId = hits[0].id;
+    method = 'CODE';
+    if (!Number.isInteger(input.requestNumber) || input.requestNumber < 1 || input.requestNumber > 2_000_000_000) {
+      throw new ValidationError('أدخل رقم الطلب');
+    }
+    const branchId = staff.role === 'STAFF' ? staff.branchId : input.branchId;
+    if (!branchId) throw new ValidationError('حدد الفرع');
+    await assertBranchAccess(staff, branchId);
+    const req = await prisma.pickupRequest.findUnique({
+      where: { branchId_day_number: { branchId, day: dayDate(at), number: input.requestNumber } },
+    });
+    if (!req || !req.open || !checkPickupCode(req.id, input.code, at)) return fail();
+    requestId = req.id;
   }
 
   const result = await prisma.$transaction(async (tx) => {

@@ -8,7 +8,9 @@ export const POST = (req: Request) =>
     const user = await requireUser(req);
     const b = await readJson(req);
     if (typeof b.qr === 'string' && b.qr) return Response.json(await verifyRecipient(user, { qr: b.qr }));
+    const number = typeof b.requestNumber === 'number' ? b.requestNumber : typeof b.requestNumber === 'string' && /^\d{1,10}$/.test(b.requestNumber.trim()) ? Number(b.requestNumber.trim()) : NaN;
+    if (!Number.isInteger(number) || number < 1) throw new ValidationError('أدخل رقم الطلب');
     if (typeof b.code !== 'string' || !b.code.trim()) throw new ValidationError('أدخل الرمز');
-    const requestId = typeof b.requestId === 'string' && b.requestId ? b.requestId : undefined;
-    return Response.json(await verifyRecipient(user, { requestId, code: b.code.trim() }));
+    const branchId = typeof b.branchId === 'string' && b.branchId ? b.branchId : undefined;
+    return Response.json(await verifyRecipient(user, { requestNumber: number, code: b.code.trim(), branchId }));
   });

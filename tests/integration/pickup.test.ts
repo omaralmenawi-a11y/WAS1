@@ -115,8 +115,8 @@ describe('lifecycle', () => {
     await advanceItem(staff, r.items[0].id, 'READY', T);
     await expect(deliverItems(staff, r.id, [r.items[0].id], T)).rejects.toThrow(Conflict);
     const wrong = pickupCode(r.id, T) === '000000' ? '000001' : '000000';
-    await expect(verifyRecipient(staff, { requestId: r.id, code: wrong }, T)).rejects.toThrow(ValidationError);
-    await expect(verifyRecipient(staff, { code: wrong }, T)).rejects.toThrow(ValidationError);
+    await expect(verifyRecipient(staff, { requestNumber: r.number, code: wrong }, T)).rejects.toThrow(ValidationError);
+    await expect(verifyRecipient(staff, { requestNumber: r.number + 1, code: pickupCode(r.id, T) }, T)).rejects.toThrow(ValidationError);
   });
 
   it('full flow closes request and nulls location', async () => {
@@ -127,7 +127,7 @@ describe('lifecycle', () => {
     await expect(advanceItem(staff, it0, 'READY', T)).rejects.toThrow(Conflict);
     expect((await advanceItem(staff, it0, 'PREPARE', T)).status).toBe('PREPARING');
     expect((await advanceItem(staff, it0, 'READY', T)).status).toBe('READY');
-    const v = await verifyRecipient(staff, { code: pickupCode(r.id, T) }, T);
+    const v = await verifyRecipient(staff, { requestNumber: r.number, code: pickupCode(r.id, T) }, T);
     expect(v).toMatchObject({ requestId: r.id, recipient: { name: 'ولي', role: 'GUARDIAN', photoKey: 'photo-1' } });
     expect(v.items).toEqual([{ itemId: it0, studentName: 'أحمد', status: 'READY' }]);
     await deliverItems(staff, r.id, [it0], plus(T, 1));
@@ -155,7 +155,7 @@ describe('lifecycle', () => {
     const r = await createRequest(g, [a.id, b.id], T);
     const [i1, i2] = r.items.map((i) => i.id);
     for (const id of [i1, i2]) { await advanceItem(staff, id, 'PREPARE', T); await advanceItem(staff, id, 'READY', T); }
-    await verifyRecipient(staff, { requestId: r.id, code: pickupCode(r.id, T) }, T);
+    await verifyRecipient(staff, { requestNumber: r.number, code: pickupCode(r.id, T) }, T);
     await prisma.pickupRequest.update({ where: { id: r.id }, data: { lat: 1, lng: 2, locationAt: T, etaSeconds: 5 } });
     await deliverItems(staff, r.id, [i1], T);
     let req = await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } });
@@ -176,7 +176,7 @@ describe('lifecycle', () => {
     const r = await createRequest(g, [a.id, b.id], T);
     await advanceItem(staff, r.items[0].id, 'PREPARE', T);
     await advanceItem(staff, r.items[0].id, 'READY', T);
-    await verifyRecipient(staff, { requestId: r.id, code: pickupCode(r.id, T) }, T);
+    await verifyRecipient(staff, { requestNumber: r.number, code: pickupCode(r.id, T) }, T);
     await expect(deliverItems(staff, r.id, [r.items[0].id, r.items[1].id], T)).rejects.toThrow(Conflict);
     await expect(deliverItems(staff, r.id, ['nope'], T)).rejects.toThrow(Conflict);
     await expect(deliverItems(staff, r.id, [], T)).rejects.toThrow(ValidationError);
@@ -234,7 +234,7 @@ describe('concurrency and stale requests', () => {
     const ctx = await setup();
     const r = await createRequest(ctx.g, [ctx.a.id, ctx.b.id], T);
     for (const i of r.items) { await advanceItem(ctx.staff, i.id, 'PREPARE', T); await advanceItem(ctx.staff, i.id, 'READY', T); }
-    await verifyRecipient(ctx.staff, { requestId: r.id, code: pickupCode(r.id, T) }, T);
+    await verifyRecipient(ctx.staff, { requestNumber: r.number, code: pickupCode(r.id, T) }, T);
     await prisma.pickupRequest.update({ where: { id: r.id }, data: { lat: 1, lng: 2, locationAt: T, etaSeconds: 5 } });
     return { ...ctx, r, n };
   }
@@ -281,23 +281,64 @@ describe('concurrency and stale requests', () => {
     const yesterday = new Date(T.getTime() - 24 * 3600_000);
     const old = await createRequest(g, [a.id], yesterday);
     await expect(verifyRecipient(staff, { qr: qrPayload(old.id, T) }, T)).rejects.toThrow('هذا الطلب لم يعد صالحاً');
-    await expect(verifyRecipient(staff, { requestId: old.id, code: pickupCode(old.id, T) }, T)).rejects.toThrow(ValidationError);
+    await expect(verifyRecipient(staff, { requestNumber: old.number, code: pickupCode(old.id, T) }, T)).rejects.toThrow(ValidationError);
     await prisma.pickupRequest.update({ where: { id: old.id }, data: { verifiedAt: T } });
     await expect(deliverItems(staff, old.id, [old.items[0].id], T)).rejects.toThrow('هذا الطلب لم يعد صالحاً');
   });
 });
 
 describe('verify rate limit and ambiguity', () => {
-  it('blocks after 10 failures in 5 minutes', async () => {
+  /** n distinct 6-digit codes none of which is `ok`. */
+  const wrongCodes = (ok: string, n: number) =>
+    Array.from({ length: n + 1 }, (_, i) => String(100000 + i * 7919)).filter((c) => c !== ok).slice(0, n);
+
+  it('blocks after 10 distinct failures in 5 minutes', async () => {
     const { a, g, staff } = await setup();
     const r = await createRequest(g, [a.id], T);
     const ok = pickupCode(r.id, T);
-    const wrong = ok === '111111' ? '222222' : '111111';
-    for (let i = 0; i < 10; i++) await expect(verifyRecipient(staff, { code: wrong }, T)).rejects.toThrow(ValidationError);
-    await expect(verifyRecipient(staff, { code: ok }, T)).rejects.toThrow(RateLimitError);
+    for (const wrong of wrongCodes(ok, 10)) await expect(verifyRecipient(staff, { requestNumber: r.number, code: wrong }, T)).rejects.toThrow(ValidationError);
+    await expect(verifyRecipient(staff, { requestNumber: r.number, code: ok }, T)).rejects.toThrow(RateLimitError);
     // window passes -> allowed again
     const later = plus(T, 6);
-    await expect(verifyRecipient(staff, { code: pickupCode(r.id, later) }, later)).resolves.toMatchObject({ requestId: r.id });
+    await expect(verifyRecipient(staff, { requestNumber: r.number, code: pickupCode(r.id, later) }, later)).resolves.toMatchObject({ requestId: r.id });
+  });
+
+  it('the same failed payload repeated within 60 s counts once (camera re-reads one bad QR)', async () => {
+    const { a, g, staff } = await setup();
+    const r = await createRequest(g, [a.id], T);
+    const bad = 'WASL1:nope:123456';
+    for (let i = 0; i < 30; i++) await expect(verifyRecipient(staff, { qr: bad }, new Date(T.getTime() + i * 1000))).rejects.toThrow(ValidationError);
+    expect(await prisma.verifyAttempt.count({ where: { staffId: staff.id, ok: false } })).toBe(1);
+    await expect(verifyRecipient(staff, { qr: qrPayload(r.id, plus(T, 0.5)) }, plus(T, 0.5))).resolves.toMatchObject({ requestId: r.id });
+    // after 60 s the same payload counts again
+    await expect(verifyRecipient(staff, { qr: bad }, plus(T, 1.5))).rejects.toThrow(ValidationError);
+    expect(await prisma.verifyAttempt.count({ where: { staffId: staff.id, ok: false } })).toBe(2);
+    // another staff member's identical payload is counted for them
+    const other = await staffOf(a.branchId, a.schoolId);
+    await expect(verifyRecipient(other, { qr: bad }, plus(T, 1.5))).rejects.toThrow(ValidationError);
+    expect(await prisma.verifyAttempt.count({ where: { staffId: other.id, ok: false } })).toBe(1);
+  });
+});
+
+describe('verify by request number + code (R8)', () => {
+  it("a code only matches its own request: another family's number is rejected", async () => {
+    const { s, a, b, g, staff } = await setup();
+    await prisma.guardianPhone.updateMany({ where: { studentId: b.id }, data: { phone: '+966507654321' } });
+    const g2 = await guardian('+966507654321', 'ثاني');
+    const r1 = await createRequest(g, [a.id], T);
+    const r2 = await createRequest(g2, [b.id], T);
+    await expect(verifyRecipient(staff, { requestNumber: r1.number, code: pickupCode(r2.id, T) }, T)).rejects.toThrow('الرمز غير صحيح');
+    const v = await verifyRecipient(staff, { requestNumber: r2.number, code: pickupCode(r2.id, T) }, T);
+    expect(v.requestId).toBe(r2.id);
+    expect(v.recipient.name).toBe('ثاني');
+    // code without a number is not accepted
+    await expect(verifyRecipient(staff, { code: pickupCode(r1.id, T) } as any, T)).rejects.toThrow(ValidationError);
+    // closed request numbers do not verify
+    await cancelRequest(g, r1.id, undefined, T);
+    await expect(verifyRecipient(staff, { requestNumber: r1.number, code: pickupCode(r1.id, T) }, T)).rejects.toThrow('الرمز غير صحيح');
+    // school admin must name the branch
+    await expect(verifyRecipient(s.admin, { requestNumber: r2.number, code: pickupCode(r2.id, T) }, T)).rejects.toThrow(ValidationError);
+    await expect(verifyRecipient(s.admin, { requestNumber: r2.number, code: pickupCode(r2.id, T), branchId: s.branch.id }, T)).resolves.toMatchObject({ requestId: r2.id });
   });
 });
 
@@ -425,7 +466,7 @@ describe('parent own-request helpers', () => {
     const items = await prisma.pickupItem.findMany({ where: { requestId: r2.id } });
     await advanceItem(staff, items[0].id, 'PREPARE', plus(T, 3));
     await advanceItem(staff, items[0].id, 'READY', plus(T, 4));
-    await verifyRecipient(staff, { requestId: r2.id, code: pickupCode(r2.id, plus(T, 5)) }, plus(T, 5));
+    await verifyRecipient(staff, { requestNumber: r2.number, code: pickupCode(r2.id, plus(T, 5)) }, plus(T, 5));
     await deliverItems(staff, r2.id, [items[0].id], plus(T, 6));
 
     const closed = await listOwnRequests(g, { open: false, limit: 30 });
