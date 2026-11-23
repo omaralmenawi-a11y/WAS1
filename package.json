@@ -17,6 +17,7 @@
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "argon2": "^0.45.2",
+    "html5-qrcode": "^2.3.8",
     "next": "^15.5.29",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",
