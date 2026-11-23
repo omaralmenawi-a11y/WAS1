@@ -55,6 +55,17 @@ describe('runDismissalNotifications', () => {
     expect(await rows(g.id)).toHaveLength(1);
   });
 
+  it('push tags carry kind, date and dismissal time', async () => {
+    await setup();
+    const g = await guardian(P1);
+    await prisma.pushSubscription.create({ data: { userId: g.id, endpoint: 'https://e/1', p256dh: 'p', auth: 'a' } });
+    const tags: string[] = [];
+    setPushSender({ send: async (_s, p) => { tags.push(JSON.parse(p).tag); return 'ok'; } });
+    await runDismissalNotifications(at('12:00'));
+    await runDismissalNotifications(at('12:15'));
+    expect(tags).toEqual(['REMINDER:2026-11-22:12:15', 'END_OF_DAY:2026-11-22:12:15']);
+  });
+
   it('combines siblings with the same dismissal into one reminder', async () => {
     await setup(['سارة محمد', 'عمر محمد'], [P1]);
     const g = await guardian(P1);

@@ -152,6 +152,26 @@ describe('pickup status notifications', () => {
     }
   });
 
+  it('push tags are per item (PREPARING/READY) and per request (DELIVERED/CANCELLED)', async () => {
+    const { req, staff, g1, g2 } = await setup();
+    await prisma.pushSubscription.create({ data: { userId: g1.id, endpoint: 'https://e/g1', p256dh: 'p', auth: 'a' } });
+    await prisma.pushSubscription.create({ data: { userId: g2.id, endpoint: 'https://e/g2', p256dh: 'p', auth: 'a' } });
+    const tags: string[] = [];
+    setPushSender({ send: async (_s, p) => { tags.push(JSON.parse(p).tag); return 'ok'; } });
+    const [i1, i2] = req.items;
+    await advanceItem(staff, i1.id, 'PREPARE', plus(T, 1));
+    await advanceItem(staff, i2.id, 'PREPARE', plus(T, 1));
+    await advanceItem(staff, i1.id, 'READY', plus(T, 2));
+    await verifyRecipient(staff, { requestNumber: req.number, code: pickupCode(req.id, plus(T, 3)) }, plus(T, 3));
+    await deliverItems(staff, req.id, [i1.id], plus(T, 4));
+    await cancelRequest(staff, req.id, 'سبب', plus(T, 5));
+    await flushNotifications();
+    expect(tags.sort()).toEqual([
+      `PREPARING:${i1.id}`, `PREPARING:${i2.id}`, `READY:${i1.id}`,
+      `DELIVERED:${req.id}`, `DELIVERED:${req.id}`, `CANCELLED:${req.id}`, `CANCELLED:${req.id}`,
+    ].sort());
+  });
+
   it('staff cancel: body is the reason, requester and other guardian notified', async () => {
     const { req, staff, g1, g2, other } = await setup();
     await cancelRequest(staff, req.id, 'تعذر الاستلام', plus(T, 1));

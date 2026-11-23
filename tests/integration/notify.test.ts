@@ -89,4 +89,13 @@ describe('notify', () => {
     const s = await prisma.pushSubscription.findFirstOrThrow();
     expect(s.lastSuccessAt).not.toBeNull();
   });
+
+  it('push tag is the payload tag when given, else the kind', async () => {
+    const u = await mkUser();
+    await mkSub(u.id, 'https://e/1');
+    const { sender, calls } = fakeSender();
+    setPushSender(sender);
+    await notify([u.id], { ...payload, tag: 'TEST:abc' });
+    expect(JSON.parse(calls[0].payload).tag).toBe('TEST:abc');
+  });
 });

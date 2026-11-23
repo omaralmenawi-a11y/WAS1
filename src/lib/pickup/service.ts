@@ -94,7 +94,7 @@ async function notifyProgress(requestId: string, itemId: string, kind: 'PREPARIN
   if (!item) return;
   const args = { names: [item.name], number: ctx.number, gate: ctx.gate };
   const m = kind === 'PREPARING' ? msgPreparing(args) : msgReady(args);
-  await notify([ctx.requesterId], { kind, ...m, url: statusUrl(requestId) }, { dedupeKey: (u) => `${kind}:${itemId}:${u}` });
+  await notify([ctx.requesterId], { kind, ...m, url: statusUrl(requestId), tag: `${kind}:${itemId}` }, { dedupeKey: (u) => `${kind}:${itemId}:${u}` });
 }
 
 async function notifyDelivered(requestId: string, itemIds: string[], at: Date): Promise<void> {
@@ -103,7 +103,7 @@ async function notifyDelivered(requestId: string, itemIds: string[], at: Date): 
   const items = ctx.items.filter((i) => itemIds.includes(i.id));
   const m = msgDelivered({ names: items.map((i) => i.name), time: formatRiyadhTime(at), gate: ctx.gate });
   const others = await linkedGuardianIds(items.map((i) => i.studentId));
-  await notify([ctx.requesterId, ...others], { kind: 'DELIVERED', ...m, url: statusUrl(requestId) });
+  await notify([ctx.requesterId, ...others], { kind: 'DELIVERED', ...m, url: statusUrl(requestId), tag: `DELIVERED:${requestId}` });
 }
 
 /** Names only the items cancelled by this action (N5), and this action's reason. */
@@ -112,7 +112,7 @@ async function notifyCancelled(requestId: string, itemIds: string[], reason: str
   if (!ctx) return;
   const cancelled = ctx.items.filter((i) => itemIds.includes(i.id));
   const others = await linkedGuardianIds(cancelled.map((i) => i.studentId));
-  await notify([ctx.requesterId, ...others], { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason }), url: statusUrl(requestId) });
+  await notify([ctx.requesterId, ...others], { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason }), url: statusUrl(requestId), tag: `CANCELLED:${requestId}` });
 }
 
 export const REVOKED_REASON = 'أُلغي من المدرسة: تغيّرت صلاحية الاستلام';
@@ -195,7 +195,7 @@ export async function announceRevoked(batches: RevokedBatch[]): Promise<void> {
       if (!ctx) return;
       const recipients = await linkedGuardianIds([...studentIds]);
       if (recipients.length === 0) return;
-      await notify(recipients, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason: REVOKED_REASON }), url: statusUrl(requestId) });
+      await notify(recipients, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason: REVOKED_REASON }), url: statusUrl(requestId), tag: `CANCELLED:${requestId}` });
     });
   }
 }

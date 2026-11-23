@@ -5,7 +5,8 @@ import { getPushSender } from './push';
 
 // Must not import next/headers or next/navigation: reachable from server.ts via pickup/service.
 
-export type NotificationPayload = { kind: string; title: string; body: string; url: string };
+/** tag: push tray tag (`${kind}:${stable id}`), so one notice only replaces an older notice about the same thing. Defaults to kind. */
+export type NotificationPayload = { kind: string; title: string; body: string; url: string; tag?: string };
 
 const PUSH_TIMEOUT_MS = 10_000;
 let pushTimeoutMs = PUSH_TIMEOUT_MS;
@@ -59,7 +60,7 @@ async function notifyOne(userId: string, payload: NotificationPayload, dedupeKey
   const sender = getPushSender();
   if (!sender) return { created: 1, pushed: 0 };
   const subs = await prisma.pushSubscription.findMany({ where: { userId } });
-  const body = JSON.stringify({ title: payload.title, body: payload.body, url: payload.url, tag: payload.kind });
+  const body = JSON.stringify({ title: payload.title, body: payload.body, url: payload.url, tag: payload.tag ?? payload.kind });
   const results = await Promise.all(
     subs.map(async (s) => {
       let r: 'ok' | 'gone' | 'error';

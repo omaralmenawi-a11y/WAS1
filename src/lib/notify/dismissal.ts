@@ -72,7 +72,7 @@ export async function runDismissalNotifications(at: Date = now()): Promise<{ rem
       g.kind === 'REMINDER'
         ? msgReminder({ names, time: g.time, minutesLeft: g.minutesLeft })
         : msgEndOfDay({ names, gate: [...new Set(g.entries.map((e) => e.gate).filter(Boolean))].join('، ') });
-    const r = await notify([g.userId], { kind: g.kind, title: msg.title, body: msg.body, url: '/parent' }, {
+    const r = await notify([g.userId], { kind: g.kind, title: msg.title, body: msg.body, url: '/parent', tag: `${g.kind}:${day.date}:${g.time}` }, {
       // Known limitation: a sibling skipped at reminder time whose request is then cancelled is still covered by the end-of-day notice.
       dedupeKey: (u) => `${g.kind}:${day.date}:${g.time}:${u}`,
     });

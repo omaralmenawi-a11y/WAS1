@@ -16,6 +16,7 @@ self.addEventListener('push', (event) => {
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
       tag: data.tag || undefined,
+      renotify: !!data.tag,
       data: { url: data.url || '/parent' },
       dir: 'rtl',
       lang: 'ar',
