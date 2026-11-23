@@ -6,7 +6,7 @@ import { writeAudit } from '../audit';
 import { assertBranchAccess } from '../authz';
 import { Conflict, Forbidden, NotFound, RateLimitError, ValidationError } from '../errors';
 import { buildScheduleCtxs, listChildrenForUser, SCHEDULE_INCLUDE } from '../guardian/children';
-import { notify } from '../notify';
+import { notifyPickupEvent } from '../notify';
 import { emitPickupChanged } from '../realtime';
 import { canRequestNow } from '../schedule';
 import { now, riyadhDay } from '../time';
@@ -118,7 +118,7 @@ export async function revokeUnlinkedItems(tx: Tx, studentIds: string[], actorId:
 export async function announceRevoked(requestIds: string[]): Promise<void> {
   for (const requestId of requestIds) {
     const r = await prisma.pickupRequest.findUnique({ where: { id: requestId }, select: { requesterId: true } });
-    if (r) await notify([r.requesterId], 'PICKUP_CANCELLED', { requestId });
+    if (r) await notifyPickupEvent([r.requesterId], 'PICKUP_CANCELLED', { requestId });
     await emitPickupChanged(requestId);
   }
 }
@@ -246,7 +246,7 @@ export async function advanceItem(staff: User, itemId: string, action: 'PREPARE'
     );
     return tx.pickupItem.findUniqueOrThrow({ where: { id: itemId } });
   });
-  if (to === 'READY') await notify([item.request.requesterId], 'ITEM_READY', { requestId: item.requestId, itemId });
+  if (to === 'READY') await notifyPickupEvent([item.request.requesterId], 'ITEM_READY', { requestId: item.requestId, itemId });
   await emitPickupChanged(item.requestId);
   return updated;
 }
@@ -399,7 +399,7 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
   });
   if (revoked) await announceRevoked([requestId]);
   if (!delivered) throw new Conflict(NOT_AUTHORISED);
-  await notify([req.requesterId], 'ITEM_DELIVERED', { requestId, itemIds: ids });
+  await notifyPickupEvent([req.requesterId], 'ITEM_DELIVERED', { requestId, itemIds: ids });
   await emitPickupChanged(requestId);
 }
 
@@ -428,7 +428,7 @@ export async function cancelRequest(actor: User, requestId: string, reasonAr?: s
       tx,
     );
   });
-  await notify([req.requesterId], 'PICKUP_CANCELLED', { requestId });
+  await notifyPickupEvent([req.requesterId], 'PICKUP_CANCELLED', { requestId });
   await emitPickupChanged(requestId);
 }
 

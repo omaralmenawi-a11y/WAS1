@@ -23,5 +23,9 @@ export function checkProductionEnv(env: Env): EnvCheck {
       errors.push('OTP_MODE=dev is not allowed in production (set ALLOW_DEV_OTP_IN_PRODUCTION=1 only for a demo)');
     }
   }
+
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !env.VAPID_SUBJECT) {
+    warnings.push('Web Push disabled: VAPID keys missing');
+  }
   return { errors, warnings };
 }

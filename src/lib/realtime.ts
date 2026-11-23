@@ -72,3 +72,12 @@ export async function emitPickupChanged(requestId: string): Promise<void> {
     console.error('emitPickupChanged failed', e);
   }
 }
+
+/** Emit to one user's sockets. No-op when io is unset; never throws. */
+export function emitToUser(userId: string, event: string, data: unknown): void {
+  try {
+    (globalThis as G).__waslIo?.to(`user:${userId}`).emit(event, data);
+  } catch (e) {
+    console.error('emitToUser failed', e);
+  }
+}

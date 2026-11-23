@@ -3,11 +3,18 @@ import { checkProductionEnv } from '../../src/lib/env-check';
 import { assertPickupCodeSecret } from '../../src/lib/pickup/code';
 
 const GOOD = 'x'.repeat(32);
+const VAPID = { VAPID_PUBLIC_KEY: 'a', VAPID_PRIVATE_KEY: 'b', VAPID_SUBJECT: 'mailto:a@b.c' };
 const prod = (env: Record<string, string | undefined>) => checkProductionEnv({ NODE_ENV: 'production', ...env });
 
 describe('checkProductionEnv', () => {
   it('passes a sound production env', () => {
-    expect(prod({ PICKUP_CODE_SECRET: GOOD, OTP_MODE: 'sms' })).toEqual({ errors: [], warnings: [] });
+    expect(prod({ PICKUP_CODE_SECRET: GOOD, OTP_MODE: 'sms', ...VAPID })).toEqual({ errors: [], warnings: [] });
+  });
+
+  it('warns (not errors) when VAPID keys are missing in production', () => {
+    const r = prod({ PICKUP_CODE_SECRET: GOOD, OTP_MODE: 'sms' });
+    expect(r.errors).toEqual([]);
+    expect(r.warnings).toContain('Web Push disabled: VAPID keys missing');
   });
 
   it('refuses a missing, short or placeholder pickup secret', () => {
@@ -25,7 +32,7 @@ describe('checkProductionEnv', () => {
     expect(prod({ PICKUP_CODE_SECRET: GOOD, OTP_MODE: 'dev', ALLOW_DEV_OTP_IN_PRODUCTION: 'true' }).errors).toHaveLength(1);
     const allowed = prod({ PICKUP_CODE_SECRET: GOOD, OTP_MODE: 'dev', ALLOW_DEV_OTP_IN_PRODUCTION: '1' });
     expect(allowed.errors).toEqual([]);
-    expect(allowed.warnings[0]).toContain('OTP_MODE=dev');
+    expect(allowed.warnings.some((w) => w.includes('OTP_MODE=dev'))).toBe(true);
   });
 
   it('reports every problem at once', () => {

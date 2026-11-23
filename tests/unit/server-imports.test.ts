@@ -21,4 +21,10 @@ describe('socket layer imported by server.ts', () => {
     const mod = await import('@/lib/pickup/service');
     expect(typeof mod.closeStaleRequests).toBe('function');
   });
+  it('notify modules do not import them either', async () => {
+    const mod = await import('@/lib/notify');
+    expect(typeof mod.notify).toBe('function');
+    const push = await import('@/lib/notify/push');
+    expect(typeof push.pushEnabled).toBe('function');
+  });
 });

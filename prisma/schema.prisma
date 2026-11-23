@@ -137,6 +137,8 @@ model User {
   photoKey           String?
   createdAt          DateTime  @default(now())
   sessions           Session[]
+  pushSubscriptions  PushSubscription[]
+  notifications      Notification[]
 }
 
 model Session {
@@ -237,4 +239,33 @@ model VerifyAttempt {
   createdAt   DateTime @default(now())
 
   @@index([staffId, createdAt])
+}
+
+model PushSubscription {
+  id            String    @id @default(cuid())
+  userId        String
+  endpoint      String    @unique
+  p256dh        String
+  auth          String
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+  lastSuccessAt DateTime?
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  kind      String
+  title     String
+  body      String
+  url       String
+  dedupeKey String?   @unique
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }
