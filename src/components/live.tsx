@@ -2,66 +2,97 @@
 import { useEffect, useRef } from 'react';
 import { io, type Socket } from 'socket.io-client';
 
-let socket: Socket | null = null;
-let boardToken: string | undefined;
+const OPTS = { path: '/socket.io', withCredentials: true } as const;
 
-/** Singleton connection. Pass `{board: token}` (board page) on first use to connect as a board client. */
-export function useSocket(opts?: { board?: string }): Socket {
+let userSocket: Socket | null = null;
+const boardSockets = new Map<string, Socket>();
+
+/** Cookie-authenticated singleton. Never returns a board socket. */
+export function getSocket(): Socket {
   if (typeof window === 'undefined') return null as unknown as Socket;
-  if (opts?.board && opts.board !== boardToken && socket) {
-    socket.close();
-    socket = null;
-  }
-  if (!socket) {
-    boardToken = opts?.board;
-    socket = io({
-      path: '/socket.io',
-      withCredentials: true,
-      ...(opts?.board ? { query: { board: opts.board } } : {}),
-    });
-  }
-  return socket;
+  if (!userSocket) userSocket = io(OPTS);
+  return userSocket;
 }
 
-export function useLive<T = unknown>(event: string, handler: (payload: T) => void, opts?: { board?: string }): void {
+/** Board socket, one per token, authenticated by the token only (no user rooms). */
+export function getBoardSocket(token: string): Socket {
+  if (typeof window === 'undefined') return null as unknown as Socket;
+  let s = boardSockets.get(token);
+  if (!s) {
+    s = io({ ...OPTS, query: { board: token } });
+    boardSockets.set(token, s);
+  }
+  return s;
+}
+
+/**
+ * Drop the user socket so the next getSocket() re-handshakes with the current cookie.
+ * Call after login, register, password reset/change and logout, before a full page reload.
+ */
+export function resetSocket(): void {
+  if (userSocket) {
+    userSocket.disconnect();
+    userSocket = null;
+  }
+}
+
+/** Log out, drop the socket and reload so no rooms or state of the previous user survive. */
+export async function logout(redirect = '/login'): Promise<void> {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } finally {
+    resetSocket();
+    window.location.assign(redirect);
+  }
+}
+
+function useBound<T>(socket: Socket | null, event: string, handler: (payload: T) => void): void {
   const ref = useRef(handler);
   ref.current = handler;
-  const board = opts?.board;
   useEffect(() => {
-    const s = useSocket(board ? { board } : undefined);
+    if (!socket) return;
     const fn = (p: T) => ref.current(p);
-    s.on(event, fn);
+    socket.on(event, fn);
     return () => {
-      s.off(event, fn);
+      socket.off(event, fn);
     };
-  }, [event, board]);
+  }, [socket, event]);
 }
 
-/** School admins pick their branch room explicitly; re-joins after reconnect. */
+export function useLive<T = unknown>(event: string, handler: (payload: T) => void): void {
+  useBound(typeof window === 'undefined' ? null : getSocket(), event, handler);
+}
+
+/** For the public board page: listens on the token-only socket. */
+export function useBoardLive<T = unknown>(token: string, event: string, handler: (payload: T) => void): void {
+  useBound(typeof window === 'undefined' ? null : getBoardSocket(token), event, handler);
+}
+
+/** School admins pick their branch room explicitly; re-joins after every (re)connect. */
 export function useJoinBranch(branchId: string | null | undefined): void {
+  const socket = typeof window === 'undefined' ? null : getSocket();
   useEffect(() => {
-    if (!branchId) return;
-    const s = useSocket();
-    const join = () => s.emit('join-branch', { branchId });
-    join();
-    s.on('connect', join);
+    if (!branchId || !socket) return;
+    const join = () => socket.emit('join-branch', { branchId });
+    if (socket.connected) join();
+    socket.on('connect', join);
     return () => {
-      s.off('connect', join);
+      socket.off('connect', join);
     };
-  }, [branchId]);
+  }, [socket, branchId]);
 }
 
-/** Calls cb when the socket reconnects (not on first connect) so pages refetch missed data. */
-export function useOnReconnect(cb: () => void, opts?: { board?: string }): void {
+/** Calls cb when the socket reconnects (not on first connect) so pages refetch missed data. Pass a token for the board page. */
+export function useOnReconnect(cb: () => void, boardToken?: string): void {
   const ref = useRef(cb);
   ref.current = cb;
-  const board = opts?.board;
+  const socket = typeof window === 'undefined' ? null : boardToken ? getBoardSocket(boardToken) : getSocket();
   useEffect(() => {
-    const s = useSocket(board ? { board } : undefined);
+    if (!socket) return;
     const fn = () => ref.current();
-    s.io.on('reconnect', fn);
+    socket.io.on('reconnect', fn);
     return () => {
-      s.io.off('reconnect', fn);
+      socket.io.off('reconnect', fn);
     };
-  }, [board]);
+  }, [socket]);
 }

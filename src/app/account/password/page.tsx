@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { resetSocket } from '@/components/live';
 import { AuthCard, ErrorText, Field, btnCls, postJson, submit, useAction } from '@/components/auth-ui';
 
 export default function ChangePasswordPage() {
@@ -12,7 +13,8 @@ export default function ChangePasswordPage() {
         className="space-y-4"
         onSubmit={submit(() =>
           run(() => postJson('/api/auth/password', { current, password }), (d) => {
-            window.location.href = d.redirect;
+            resetSocket();
+            window.location.assign(d.redirect);
           }),
         )}
       >

@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import { resetSocket } from '@/components/live';
 import { useState } from 'react';
 import { AuthCard, ErrorText, Field, btnCls, postJson, submit, useAction } from '@/components/auth-ui';
 
@@ -16,7 +17,8 @@ export default function ForgotPage() {
         onSubmit={submit(() =>
           sent
             ? run(() => postJson('/api/auth/reset', { identifier, code, password }), () => {
-                window.location.href = '/login';
+                resetSocket();
+                window.location.assign('/login');
               })
             : run(() => postJson('/api/auth/otp', { identifier, purpose: 'RESET' }), () => setSent(true)),
         )}

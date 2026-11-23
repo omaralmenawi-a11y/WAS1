@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import { resetSocket } from '@/components/live';
 import { useState } from 'react';
 import { AuthCard, ErrorText, Field, btnCls, postJson, submit, useAction } from '@/components/auth-ui';
 
@@ -17,7 +18,8 @@ export default function RegisterPage() {
         onSubmit={submit(() =>
           sent
             ? run(() => postJson('/api/auth/register', { identifier, code, name, password }), (d) => {
-                window.location.href = d.redirect;
+                resetSocket();
+                window.location.assign(d.redirect);
               })
             : run(() => postJson('/api/auth/otp', { identifier, purpose: 'REGISTER' }), () => setSent(true)),
         )}
