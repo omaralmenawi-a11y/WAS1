@@ -66,6 +66,25 @@ describe('runDismissalNotifications', () => {
     expect(tags).toEqual(['REMINDER:2026-11-22:12:15', 'END_OF_DAY:2026-11-22:12:15']);
   });
 
+  it('computes minutes left at send time and drops a reminder that would arrive at or after dismissal', async () => {
+    await setup();
+    const g = await guardian(P1);
+    expect(await runDismissalNotifications(at('12:00'), { clock: () => at('12:05') })).toEqual({ reminders: 1, endOfDay: 0 });
+    expect((await rows(g.id, 'REMINDER'))[0].body).toBe('انصراف سارة الساعة 12:15.');
+    await prisma.notification.deleteMany({});
+    expect(await runDismissalNotifications(at('12:00'), { clock: () => at('12:15') })).toEqual({ reminders: 0, endOfDay: 0 });
+    expect(await rows(g.id)).toHaveLength(0);
+  });
+
+  it('sends each of many guardian groups exactly once', async () => {
+    const phones = Array.from({ length: 45 }, (_, i) => `+9665000000${String(i).padStart(2, '0')}`);
+    await setup(['سارة محمد'], phones);
+    const gs = await Promise.all(phones.map((p) => guardian(p)));
+    const [a, b] = await Promise.all([runDismissalNotifications(at('12:00')), runDismissalNotifications(at('12:00'))]);
+    expect(a.reminders + b.reminders).toBe(45);
+    for (const g of gs) expect(await rows(g.id, 'REMINDER')).toHaveLength(1);
+  });
+
   it('combines siblings with the same dismissal into one reminder', async () => {
     await setup(['سارة محمد', 'عمر محمد'], [P1]);
     const g = await guardian(P1);
