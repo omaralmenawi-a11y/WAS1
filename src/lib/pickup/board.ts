@@ -1,7 +1,7 @@
 import { prisma } from '../db';
 import { NotFound } from '../errors';
 import { now, riyadhDay } from '../time';
-import { loadRequestForViews, toBoardEntry } from './views';
+import { loadRequestsForViews, toBoardEntry } from './views';
 
 export type BoardTile = { number: number; gateName: string };
 export type BoardData = { branchName: string; preparing: BoardTile[]; ready: BoardTile[] };
@@ -11,12 +11,10 @@ export async function getBoard(token: string, at: Date = now()): Promise<BoardDa
   const branch = token ? await prisma.branch.findUnique({ where: { boardToken: token }, select: { id: true, name: true } }) : null;
   if (!branch) throw new NotFound('رابط الشاشة غير صالح');
   const day = new Date(`${riyadhDay(at).date}T00:00:00Z`);
-  const open = await prisma.pickupRequest.findMany({ where: { branchId: branch.id, day, open: true }, select: { id: true } });
-  const loaded = await Promise.all(open.map((r) => loadRequestForViews(r.id)));
+  const loaded = await loadRequestsForViews({ branchId: branch.id, day, open: true });
   const preparing: BoardTile[] = [];
   const ready: BoardTile[] = [];
   for (const r of loaded) {
-    if (!r) continue;
     const e = toBoardEntry(r);
     if (e.status === 'READY') ready.push({ number: e.number, gateName: e.gateName });
     else if (e.status === 'PREPARING') preparing.push({ number: e.number, gateName: e.gateName });

@@ -5,6 +5,7 @@ import { createClassroom, createGate, setClassSchedule } from '../../src/lib/sch
 import { applyImport } from '../../src/lib/school/import';
 import { advanceItem, createRequest } from '../../src/lib/pickup/service';
 import { listStaffRequests } from '../../src/lib/pickup/staff';
+import { getBoard } from '../../src/lib/pickup/board';
 import { createSession } from '../../src/lib/auth/session';
 import { NotFound } from '../../src/lib/errors';
 import { PATCH as patchItem } from '../../src/app/api/staff/items/[id]/route';
@@ -101,6 +102,48 @@ describe('listStaffRequests', () => {
     await expect(listStaffRequests(admin, { branchId: o.branch.id }, T)).rejects.toThrow(NotFound);
     const staff = await staffOf(s);
     expect((await listStaffRequests(staff, { branchId: o.branch.id }, T)).map((r) => r.id)).toContain(r1.id);
+  });
+});
+
+describe('batched view loading', () => {
+  it('50 open requests load with a bounded number of queries (no N+1)', async () => {
+    const s = await mkSchool('a');
+    const room = await prisma.classroom.findFirstOrThrow({ where: { branchId: s.branch.id } });
+    const day = new Date('2026-11-23T00:00:00Z');
+    const g = await guardian(1);
+    for (let n = 1; n <= 50; n++) {
+      const st = await prisma.student.create({ data: { schoolId: s.school.id, branchId: s.branch.id, classroomId: room.id, defaultGateId: s.gate1.id, fullName: `طالب ${n}` } });
+      await prisma.pickupRequest.create({
+        data: { schoolId: s.school.id, branchId: s.branch.id, gateId: n % 2 ? s.gate1.id : s.gate2.id, number: n, day, requesterId: g.id, items: { create: { studentId: st.id, status: n % 3 ? 'EN_ROUTE' : 'PREPARING' } } },
+      });
+    }
+    const staff = await staffOf(s);
+    // Count model calls (each is one SQL query) while running the real ones. Prisma delegates are proxies whose
+    // own-property descriptors read as undefined, so vi.spyOn cannot restore them: wrap and put back by hand.
+    let count = 0;
+    const restore: (() => void)[] = [];
+    const wrap = (model: any, method: string) => {
+      const orig = model[method];
+      model[method] = (...a: unknown[]) => {
+        count++;
+        return orig.apply(model, a);
+      };
+      restore.push(() => (model[method] = orig));
+    };
+    for (const m of ['findMany', 'findUnique', 'findFirst']) for (const model of [prisma.pickupRequest, prisma.gate, prisma.user]) wrap(model, m);
+    const calls = () => count;
+    try {
+      const list = await listStaffRequests(staff, {}, T);
+      expect(list).toHaveLength(50);
+      expect(list.find((r) => r.number === 2)).toMatchObject({ gateName: 'بوابة 2', requesterName: 'ولي 1' });
+      expect(calls()).toBeLessThanOrEqual(3);
+      count = 0;
+      const board = await getBoard(s.branch.boardToken, T);
+      expect(board.preparing).toHaveLength(16);
+      expect(calls()).toBeLessThanOrEqual(3);
+    } finally {
+      restore.forEach((r) => r());
+    }
   });
 });
 

@@ -36,15 +36,28 @@ export type RequestForViews = Prisma.PickupRequestGetPayload<{ include: typeof i
   requester: { name: string };
 };
 
-/** One include for items/students/classrooms; gate and requester have no Prisma relation, so they are fetched in parallel. */
-export async function loadRequestForViews(requestId: string): Promise<RequestForViews | null> {
-  const r = await prisma.pickupRequest.findUnique({ where: { id: requestId }, include });
-  if (!r) return null;
-  const [gate, requester] = await Promise.all([
-    prisma.gate.findUnique({ where: { id: r.gateId }, select: { name: true } }),
-    prisma.user.findUnique({ where: { id: r.requesterId }, select: { name: true } }),
+/**
+ * Batched loader: one findMany with items/students/classrooms, then one gate and one user lookup
+ * (gate and requester have no Prisma relation). Order follows `orderBy` (default id asc).
+ */
+export async function loadRequestsForViews(
+  where: Prisma.PickupRequestWhereInput,
+  orderBy: Prisma.PickupRequestOrderByWithRelationInput = { id: 'asc' },
+): Promise<RequestForViews[]> {
+  const rows = await prisma.pickupRequest.findMany({ where, include, orderBy });
+  if (rows.length === 0) return [];
+  const [gates, users] = await Promise.all([
+    prisma.gate.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.gateId))] } }, select: { id: true, name: true } }),
+    prisma.user.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.requesterId))] } }, select: { id: true, name: true } }),
   ]);
-  return { ...r, gate: { name: gate?.name ?? '' }, requester: { name: requester?.name ?? '' } };
+  const gateName = new Map(gates.map((g) => [g.id, g.name]));
+  const userName = new Map(users.map((u) => [u.id, u.name]));
+  return rows.map((r) => ({ ...r, gate: { name: gateName.get(r.gateId) ?? '' }, requester: { name: userName.get(r.requesterId) ?? '' } }));
+}
+
+/** Single request: thin wrapper over the batched loader. */
+export async function loadRequestForViews(requestId: string): Promise<RequestForViews | null> {
+  return (await loadRequestsForViews({ id: requestId }))[0] ?? null;
 }
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);

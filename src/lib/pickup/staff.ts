@@ -1,10 +1,9 @@
-import type { User } from '@prisma/client';
-import { prisma } from '../db';
+import type { Prisma, User } from '@prisma/client';
 import { assertBranchAccess } from '../authz';
 import { Forbidden, NotFound, ValidationError } from '../errors';
 import { now, riyadhDay } from '../time';
 import { sortStaffViews } from './staff-client';
-import { loadRequestForViews, toStaffView, type StaffRequestView } from './views';
+import { loadRequestsForViews, toStaffView, type StaffRequestView } from './views';
 
 /** Open requests of today for the staff's branch (and gates, when assigned), most actionable first. */
 export async function listStaffRequests(
@@ -24,7 +23,7 @@ export async function listStaffRequests(
   }
 
   const q = opts.q?.trim();
-  const where: Record<string, unknown> = {
+  const where: Prisma.PickupRequestWhereInput = {
     branchId,
     open: true,
     day: new Date(`${riyadhDay(at).date}T00:00:00Z`),
@@ -38,8 +37,5 @@ export async function listStaffRequests(
     ];
   }
 
-  const rows = await prisma.pickupRequest.findMany({ where, select: { id: true } });
-  const loaded = await Promise.all(rows.map((r) => loadRequestForViews(r.id)));
-  const views = loaded.filter((r): r is NonNullable<typeof r> => !!r).map(toStaffView);
-  return sortStaffViews(views);
+  return sortStaffViews((await loadRequestsForViews(where)).map(toStaffView));
 }
