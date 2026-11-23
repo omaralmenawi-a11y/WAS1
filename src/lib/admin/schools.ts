@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { newBoardToken } from '../school/board-token';
 import { normalizeUsername } from '../auth/identifier';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
@@ -31,7 +31,7 @@ export async function createSchoolWithAdmin(i: CreateSchoolInput) {
       }
       const school = await tx.school.create({ data: { name: schoolName } });
       const branch = await tx.branch.create({
-        data: { schoolId: school.id, name: branchName, boardToken: randomBytes(18).toString('base64url') },
+        data: { schoolId: school.id, name: branchName, boardToken: newBoardToken() },
       });
       const admin = await tx.user.create({
         data: {

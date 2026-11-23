@@ -131,6 +131,7 @@ model User {
   email              String?   @unique
   passwordHash       String
   mustChangePassword Boolean   @default(false)
+  active             Boolean   @default(true)
   photoKey           String?
   createdAt          DateTime  @default(now())
   sessions           Session[]

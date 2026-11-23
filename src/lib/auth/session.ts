@@ -21,7 +21,7 @@ export async function createSession(userId: string, role: Role): Promise<string>
 export async function getSessionUser(token: string | undefined): Promise<User | null> {
   if (!token) return null;
   const s = await prisma.session.findUnique({ where: { tokenHash: sha256(token) }, include: { user: true } });
-  if (!s || s.expiresAt <= now()) return null;
+  if (!s || s.expiresAt <= now() || !s.user.active) return null;
   return s.user;
 }
 

@@ -82,8 +82,8 @@ export async function login(input: { identifier: string; password: string }): Pr
   // always run argon2 so unknown accounts are not distinguishable by timing
   const hash = user?.passwordHash ?? (await (dummyHash ??= hashPassword('wasl-dummy-password')));
   const ok = await verifyPassword(hash, input.password ?? '');
-  await prisma.loginAttempt.create({ data: { identifier: key, success: !!user && ok, createdAt: now() } });
-  if (!user || !ok) throw new InvalidCredentials();
+  await prisma.loginAttempt.create({ data: { identifier: key, success: !!user && ok && user.active, createdAt: now() } });
+  if (!user || !ok || !user.active) throw new InvalidCredentials();
   return user;
 }
 
