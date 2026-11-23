@@ -40,7 +40,7 @@ npm run dev                 # http://localhost:3000
 | موظف البوابة | `noura` | `Staff@12345` |
 | ولي أمر | سجّل من `/register` برقم `0500000001` (له ابنان) | تختارها أنت |
 
-يرفض الـ seed العمل مع `NODE_ENV=production` إلا مع `--force`.
+يرفض الـ seed العمل مع `NODE_ENV=production` إلا مع `--force`، وعندها تبقى كل الحسابات المزروعة مطالبة بتغيير كلمة المرور عند أول دخول.
 
 ## رموز التحقق (OTP) في وضع التطوير
 
@@ -103,7 +103,7 @@ npm run dev                 # http://localhost:3000
 
 ## Demo accounts
 
-`npm run db:seed` prints the public board URL and creates (school "مدارس الأفق الأهلية (تجريبي)", branch Al-Malqa): platform admin `root` / `Root@12345`, school admin `admin` / `Admin@12345`, staff `noura` / `Staff@12345`. The demo guardian registers at `/register` with `0500000001` (two linked children). The seed refuses to run under `NODE_ENV=production` unless `--force` is passed.
+`npm run db:seed` prints the public board URL and creates (school "مدارس الأفق الأهلية (تجريبي)", branch Al-Malqa): platform admin `root` / `Root@12345`, school admin `admin` / `Admin@12345`, staff `noura` / `Staff@12345`. The demo guardian registers at `/register` with `0500000001` (two linked children). The seed refuses to run under `NODE_ENV=production` unless `--force` is passed; then every seeded account must change its password at first sign-in.
 
 ## OTP codes in dev
 

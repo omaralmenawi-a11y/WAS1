@@ -42,10 +42,17 @@ const STUDENTS: [string, string, string, string, string[]][] = [
 ];
 
 async function main() {
-  if (process.env.NODE_ENV === 'production' && !process.argv.includes('--force')) {
+  const production = process.env.NODE_ENV === 'production';
+  if (production && !process.argv.includes('--force')) {
     console.error('Refusing to seed demo data with NODE_ENV=production. Pass --force to override.');
     process.exit(1);
   }
+  if (production) {
+    console.warn('WARNING: seeding demo data in production (--force). The demo passwords below are public;');
+    console.warn('WARNING: every seeded account keeps mustChangePassword=true and must set a new password at first sign-in.');
+  }
+  /** Outside production the demo accounts are ready to use; in production every one must change its public password. */
+  const ready = (id: string) => prisma.user.update({ where: { id }, data: { mustChangePassword: production } });
   if (await prisma.school.findFirst({ where: { name: DEMO_SCHOOL } })) {
     console.log('Demo school already exists; nothing to do.');
     return;
@@ -64,7 +71,7 @@ async function main() {
     adminUsername: 'admin',
     tempPassword: 'Admin@12345',
   });
-  await prisma.user.update({ where: { id: admin.id }, data: { mustChangePassword: false } });
+  await ready(admin.id);
   const actor = admin;
 
   await updateBranch(actor, { id: branch.id, name: BRANCH, lat: LAT, lng: LNG });
@@ -88,10 +95,10 @@ async function main() {
     tempPassword: 'Staff@12345',
     gateIds: gates.map((g) => g.id),
   });
-  await prisma.user.update({ where: { id: staff.id }, data: { mustChangePassword: false } });
+  await ready(staff.id);
 
   const root = await createPlatformAdmin('root', 'Root@12345');
-  await prisma.user.update({ where: { id: root.id }, data: { mustChangePassword: false } });
+  await ready(root.id);
 
   const base = process.env.APP_URL ?? 'http://localhost:3000';
   console.log(`Seeded "${DEMO_SCHOOL}" (${res.created} students).`);
