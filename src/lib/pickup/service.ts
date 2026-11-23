@@ -137,24 +137,33 @@ async function unlinkedItemIds(tx: Tx, req: PickupRequest): Promise<string[]> {
   return items.filter((i) => !i.student.active || !phone || !i.student.phones.some((p) => p.phone === phone)).map((i) => i.id);
 }
 
-/** Cancels revoked items of a locked request, closes it when nothing is left, audits. */
-async function cancelRevoked(tx: Tx, req: PickupRequest, itemIds: string[], actorId: string | null, at: Date): Promise<void> {
-  await tx.pickupItem.updateMany({
+/** What one revocation actually cancelled in a request; collect these and pass them to announceRevoked after commit. */
+export type RevokedBatch = { requestId: string; itemIds: string[]; studentIds: string[] };
+
+/** Cancels revoked items of a locked request, closes it when nothing is left, audits. Returns the items it really cancelled. */
+async function cancelRevoked(tx: Tx, req: PickupRequest, itemIds: string[], actorId: string | null, at: Date): Promise<RevokedBatch> {
+  const rows = await tx.pickupItem.findMany({
     where: { id: { in: itemIds }, requestId: req.id, status: { in: ACTIVE } },
+    select: { id: true, studentId: true },
+  });
+  const ids = rows.map((r) => r.id);
+  await tx.pickupItem.updateMany({
+    where: { id: { in: ids }, requestId: req.id, status: { in: ACTIVE } },
     data: { status: 'CANCELLED', cancelledAt: at, cancelReason: REVOKED_REASON },
   });
   await closeIfDone(tx, req.id, at);
   await writeAudit(
-    { schoolId: req.schoolId, actorId, action: 'PICKUP_CANCELLED', entity: 'PickupRequest', entityId: req.id, data: { reason: REVOKED_REASON, cancelled: itemIds.length, itemIds, branchId: req.branchId } },
+    { schoolId: req.schoolId, actorId, action: 'PICKUP_CANCELLED', entity: 'PickupRequest', entityId: req.id, data: { reason: REVOKED_REASON, cancelled: ids.length, itemIds: ids, branchId: req.branchId } },
     tx,
   );
+  return { requestId: req.id, itemIds: ids, studentIds: [...new Set(rows.map((r) => r.studentId))] };
 }
 
 /**
  * Call inside the transaction that changed students' phones or active flag: cancels their active items
- * whose requester is no longer linked. Returns the touched request ids; pass them to announceRevoked after commit.
+ * whose requester is no longer linked. Returns what it cancelled per request; pass the collected batches to announceRevoked once after commit.
  */
-export async function revokeUnlinkedItems(tx: Tx, studentIds: string[], actorId: string | null, at: Date = now()): Promise<string[]> {
+export async function revokeUnlinkedItems(tx: Tx, studentIds: string[], actorId: string | null, at: Date = now()): Promise<RevokedBatch[]> {
   if (studentIds.length === 0) return [];
   const rows = await tx.pickupItem.findMany({
     where: { studentId: { in: studentIds }, status: { in: ACTIVE } },
@@ -162,35 +171,34 @@ export async function revokeUnlinkedItems(tx: Tx, studentIds: string[], actorId:
     distinct: ['requestId'],
     orderBy: { requestId: 'asc' },
   });
-  const touched: string[] = [];
+  const touched: RevokedBatch[] = [];
   for (const { requestId } of rows) {
     const req = await lockRequest(tx, requestId);
     const ids = await unlinkedItemIds(tx, req);
     if (ids.length === 0) continue;
-    await cancelRevoked(tx, req, ids, actorId, at);
-    touched.push(requestId);
+    touched.push(await cancelRevoked(tx, req, ids, actorId, at));
   }
   return touched;
 }
 
 /**
  * After commit: tell the guardians still linked to the revoked students, and live views, about revocations.
- * Only the items revoked by this action are considered (the latest revocation batch of the request, which
- * shares one cancelledAt). A requester who lost the link is not notified; one who is still linked is.
+ * Batches are merged per request (one notice per request, even when several students were revoked in separate
+ * transactions). A requester who lost the link is not notified; one who is still linked is.
  * Stale auto-closes send nothing.
  */
-export async function announceRevoked(requestIds: string[]): Promise<void> {
-  for (const requestId of requestIds) {
+export async function announceRevoked(batches: RevokedBatch[]): Promise<void> {
+  const merged = new Map<string, Set<string>>();
+  for (const b of batches) {
+    const set = merged.get(b.requestId) ?? new Set<string>();
+    b.studentIds.forEach((id) => set.add(id));
+    merged.set(b.requestId, set);
+  }
+  for (const [requestId, studentIds] of merged) {
     await safely(async () => {
       const ctx = await loadNotifyCtx(requestId);
       if (!ctx) return;
-      const revoked = await prisma.pickupItem.findMany({
-        where: { requestId, status: 'CANCELLED', cancelReason: REVOKED_REASON },
-        select: { id: true, studentId: true, cancelledAt: true },
-      });
-      const latest = Math.max(0, ...revoked.map((i) => i.cancelledAt?.getTime() ?? 0));
-      const batch = revoked.filter((i) => (i.cancelledAt?.getTime() ?? 0) === latest);
-      const recipients = await linkedGuardianIds(batch.map((i) => i.studentId));
+      const recipients = await linkedGuardianIds([...studentIds]);
       if (recipients.length === 0) return;
       await notify(recipients, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason: REVOKED_REASON }), url: statusUrl(requestId) });
     });
@@ -401,15 +409,14 @@ export async function verifyRecipient(staff: User, input: VerifyInput, at: Date 
     requestId = req.id;
   }
 
-  let revoked = false;
+  let revoked: RevokedBatch | null = null;
   const result = await prisma.$transaction(async (tx) => {
-    revoked = false;
+    revoked = null;
     const locked = await lockRequest(tx, requestId);
     if (!locked.open) throw new ValidationError(WRONG_CODE);
     const unlinked = await unlinkedItemIds(tx, locked);
     if (unlinked.length) {
-      revoked = true;
-      await cancelRevoked(tx, locked, unlinked, staff.id, at);
+      revoked = await cancelRevoked(tx, locked, unlinked, staff.id, at);
       // Commit the cancellation, then reject when no child is left to hand over.
       if ((await tx.pickupItem.count({ where: { requestId, status: { in: ACTIVE } } })) === 0) return null;
     }
@@ -432,7 +439,7 @@ export async function verifyRecipient(staff: User, input: VerifyInput, at: Date 
       items: items.map((i) => ({ itemId: i.id, studentName: i.student.fullName, status: i.status })),
     };
   });
-  if (revoked) await announceRevoked([requestId]);
+  if (revoked) await announceRevoked([revoked]);
   else await emitPickupChanged(requestId);
   if (!result) throw new ValidationError(NOT_AUTHORISED);
   return result;
@@ -445,9 +452,9 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
   const req = await loadRequest(requestId);
   await assertBranchAccess(staff, req.branchId);
 
-  let revoked = false;
+  let revoked: RevokedBatch | null = null;
   const delivered = await prisma.$transaction(async (tx) => {
-    revoked = false;
+    revoked = null;
     const cur = await lockRequest(tx, requestId);
     if (!isToday(cur, at)) throw new ValidationError(STALE);
     if (!cur.open) throw new Conflict('الطلب مغلق');
@@ -455,8 +462,7 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
     if (age < 0 || age > VERIFY_VALID_MS) throw new Conflict('يجب التحقق من المستلم قبل التسليم');
     const unlinked = await unlinkedItemIds(tx, cur);
     if (unlinked.length) {
-      revoked = true;
-      await cancelRevoked(tx, cur, unlinked, staff.id, at);
+      revoked = await cancelRevoked(tx, cur, unlinked, staff.id, at);
       // Commit the cancellation; refuse the whole hand-over so staff re-checks who is at the gate.
       if (ids.some((id) => unlinked.includes(id))) return false;
     }
@@ -472,7 +478,7 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
     await closeIfDone(tx, requestId, at);
     return true;
   });
-  if (revoked) await announceRevoked([requestId]);
+  if (revoked) await announceRevoked([revoked]);
   if (!delivered) throw new Conflict(NOT_AUTHORISED);
   await safely(() => notifyDelivered(requestId, ids, at));
   await emitPickupChanged(requestId);

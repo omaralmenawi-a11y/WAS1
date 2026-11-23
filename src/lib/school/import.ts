@@ -5,7 +5,7 @@ import { writeAudit } from '../audit';
 import { assertSchoolAccess } from '../authz';
 import { ValidationError } from '../errors';
 import { normalizePhone } from '../phone';
-import { announceRevoked, revokeUnlinkedItems } from '../pickup/service';
+import { announceRevoked, revokeUnlinkedItems, type RevokedBatch } from '../pickup/service';
 import { requireManager } from './setup';
 
 export type ImportRow = { externalId: string; fullName: string; branch: string; classroom: string; gate: string; phones: string[] };
@@ -146,7 +146,7 @@ export async function applyImport(
   const errors: RowMessage[] = [];
   let created = 0;
   let updated = 0;
-  const revoked: string[] = []; // requests whose requester lost the link to a child (announced after all rows)
+  const revoked: RevokedBatch[] = []; // requests whose requester lost the link to a child (announced after all rows)
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];

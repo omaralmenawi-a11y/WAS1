@@ -162,4 +162,16 @@ describe('pickup status notifications', () => {
     expect(r[0].title).toBe(`أُلغي طلب الاستلام ${req.number}`);
     expect(await rows(g2.id, 'CANCELLED')).toHaveLength(1);
   });
+
+  it('import: two sibling rows of one request both lose the requester; each remaining guardian gets exactly one notice', async () => {
+    const { s, req, g1, g2, other } = await setup();
+    await applyImport(s.admin, s.school.id, ['أحمد علي', 'بدر سعد'].map((n, i) => ({
+      branch: s.branch.name, externalId: `${i}`, fullName: n, classroom: '1/أ', gate: 'بوابة 1', phones: [P2],
+    })));
+    expect(await rows(g1.id)).toHaveLength(0);
+    const r = await rows(g2.id, 'CANCELLED');
+    expect(r).toHaveLength(1);
+    expect(r[0].title).toBe(`أُلغي طلب الاستلام ${req.number}`);
+    expect(await rows(other.id)).toHaveLength(0);
+  });
 });

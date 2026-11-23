@@ -5,7 +5,7 @@ import { writeAudit } from '../audit';
 import { assertBranchAccess, assertSchoolAccess } from '../authz';
 import { Conflict, NotFound, ValidationError } from '../errors';
 import { normalizePhone } from '../phone';
-import { announceRevoked, revokeUnlinkedItems } from '../pickup/service';
+import { announceRevoked, revokeUnlinkedItems, type RevokedBatch } from '../pickup/service';
 import { parse, requireManager } from './setup';
 
 const id = z.string().min(1, 'المعرف مطلوب');
@@ -95,7 +95,7 @@ export async function updateStudent(
   const schoolId = branchId === s.branchId ? s.schoolId : (await prisma.branch.findUnique({ where: { id: branchId }, select: { schoolId: true } }))?.schoolId;
   if (schoolId !== s.schoolId) throw new NotFound(); // never move a student across schools
   try {
-    let revoked: string[] = [];
+    let revoked: RevokedBatch[] = [];
     const out = await prisma.$transaction(async (tx) => {
       await assertRefs(tx, branchId, classroomId, gateId);
       const u = await tx.student.update({
@@ -129,7 +129,7 @@ export async function setStudentActive(actor: User, input: { id: string; active:
   const i = parse(z.object({ id, active: z.boolean({ message: 'الحالة غير صالحة' }) }), input);
   requireManager(actor);
   const s = await loadStudent(actor, i.id);
-  let revoked: string[] = [];
+  let revoked: RevokedBatch[] = [];
   const out = await prisma.$transaction(async (tx) => {
     const u = await tx.student.update({ where: { id: s.id }, data: { active: i.active } });
     await writeAudit({ schoolId: s.schoolId, actorId: actor.id, action: i.active ? 'STUDENT_ACTIVATED' : 'STUDENT_DEACTIVATED', entity: 'Student', entityId: s.id, data: {} }, tx);
