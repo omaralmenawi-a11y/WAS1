@@ -102,11 +102,15 @@ export async function resetPassword(input: { identifier: string; code: string; p
       data: { passwordHash: await hashPassword(input.password), mustChangePassword: false },
     }),
     prisma.session.deleteMany({ where: { userId: user.id } }),
+    prisma.pushSubscription.deleteMany({ where: { userId: user.id } }),
   ]);
 }
 
-/** Changes the password and ends every other session of the user (the one holding currentToken stays). */
-export async function changePassword(userId: string, current: string, next: string, currentToken?: string): Promise<void> {
+/**
+ * Changes the password, ends every other session of the user (the one holding currentToken stays) and drops
+ * every push subscription except this device's (currentEndpoint, sent by the client like logout does).
+ */
+export async function changePassword(userId: string, current: string, next: string, currentToken?: string, currentEndpoint?: string): Promise<void> {
   checkPassword(next);
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (!(await verifyPassword(user.passwordHash, current ?? ''))) throw new InvalidCredentials('كلمة المرور الحالية غير صحيحة');
@@ -115,4 +119,6 @@ export async function changePassword(userId: string, current: string, next: stri
     data: { passwordHash: await hashPassword(next), mustChangePassword: false },
   });
   await destroyOtherSessions(userId, currentToken);
+  const keep = typeof currentEndpoint === 'string' && currentEndpoint ? currentEndpoint : undefined;
+  await prisma.pushSubscription.deleteMany({ where: { userId, ...(keep ? { endpoint: { not: keep } } : {}) } });
 }

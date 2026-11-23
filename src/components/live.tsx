@@ -36,6 +36,17 @@ export function resetSocket(): void {
   }
 }
 
+/** Best-effort: this device's push endpoint (kept subscribed) within 1.5 s; never throws. */
+export async function currentPushEndpoint(): Promise<string | undefined> {
+  const work = (async () => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return undefined;
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager?.getSubscription();
+    return sub?.endpoint;
+  })().catch(() => undefined);
+  return Promise.race([work, new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500))]);
+}
+
 /** Best-effort: unsubscribe this device from push within 1.5 s; never throws. Returns its endpoint. */
 async function dropPushSubscription(): Promise<string | undefined> {
   const work = (async () => {

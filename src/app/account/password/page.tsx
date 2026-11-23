@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { resetSocket } from '@/components/live';
+import { currentPushEndpoint, resetSocket } from '@/components/live';
 import { AuthCard, ErrorText, Field, btnCls, postJson, submit, useAction } from '@/components/auth-ui';
 
 export default function ChangePasswordPage() {
@@ -12,7 +12,7 @@ export default function ChangePasswordPage() {
       <form
         className="space-y-4"
         onSubmit={submit(() =>
-          run(() => postJson('/api/auth/password', { current, password }), (d) => {
+          run(async () => postJson('/api/auth/password', { current, password, endpoint: await currentPushEndpoint() }), (d) => {
             resetSocket();
             window.location.assign(d.redirect);
           }),

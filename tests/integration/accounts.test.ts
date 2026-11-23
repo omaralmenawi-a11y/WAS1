@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { prisma } from '../../src/lib/db';
 import { issueOtp, verifyOtp } from '../../src/lib/auth/otp';
-import { registerGuardian, login, resetPassword } from '../../src/lib/auth/accounts';
+import { changePassword, registerGuardian, login, resetPassword } from '../../src/lib/auth/accounts';
 import { createSession, getSessionUser } from '../../src/lib/auth/session';
 import { Conflict, InvalidCredentials, RateLimitError, ValidationError } from '../../src/lib/errors';
 
@@ -86,6 +86,30 @@ describe('accounts', () => {
     await resetPassword({ identifier: PHONE, code: rcode, password: 'newpassword1' });
     await expect(login({ identifier: PHONE, password: 'oldpassword1' })).rejects.toBeInstanceOf(InvalidCredentials);
     expect((await login({ identifier: PHONE, password: 'newpassword1' })).phone).toBe(PHONE);
+  });
+
+  it('reset password removes every push subscription of the user', async () => {
+    const code = await otpFor(PHONE);
+    const u = await registerGuardian({ identifier: PHONE, code, name: 'x', password: 'oldpassword1' });
+    const other = await prisma.user.create({ data: { role: 'GUARDIAN', name: 'o', passwordHash: 'h' } });
+    for (const [userId, endpoint] of [[u.id, 'https://e/1'], [u.id, 'https://e/2'], [other.id, 'https://e/3']]) {
+      await prisma.pushSubscription.create({ data: { userId, endpoint, p256dh: 'p', auth: 'a' } });
+    }
+    await resetPassword({ identifier: PHONE, code: await otpFor(PHONE, 'RESET'), password: 'newpassword1' });
+    expect((await prisma.pushSubscription.findMany()).map((s) => s.endpoint)).toEqual(['https://e/3']);
+  });
+
+  it('change password removes push subscriptions except the current device', async () => {
+    const code = await otpFor(PHONE);
+    const u = await registerGuardian({ identifier: PHONE, code, name: 'x', password: 'password123' });
+    const other = await prisma.user.create({ data: { role: 'GUARDIAN', name: 'o', passwordHash: 'h' } });
+    for (const [userId, endpoint] of [[u.id, 'https://e/1'], [u.id, 'https://e/2'], [other.id, 'https://e/3']]) {
+      await prisma.pushSubscription.create({ data: { userId, endpoint, p256dh: 'p', auth: 'a' } });
+    }
+    await changePassword(u.id, 'password123', 'newpassword1', undefined, 'https://e/2');
+    expect((await prisma.pushSubscription.findMany({ orderBy: { endpoint: 'asc' } })).map((s) => s.endpoint)).toEqual(['https://e/2', 'https://e/3']);
+    await changePassword(u.id, 'newpassword1', 'newpassword2');
+    expect((await prisma.pushSubscription.findMany()).map((s) => s.endpoint)).toEqual(['https://e/3']);
   });
 
   it('session lifetime', async () => {

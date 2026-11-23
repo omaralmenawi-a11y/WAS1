@@ -10,7 +10,7 @@ export async function POST(req: Request) {
     const user = await requireUser(req, { allowMustChangePassword: true });
     const b = await readJson(req);
     const token = parseCookie(req.headers.get('cookie'), SESSION_COOKIE);
-    await changePassword(user.id, String(b.current ?? ''), String(b.password ?? ''), token);
+    await changePassword(user.id, String(b.current ?? ''), String(b.password ?? ''), token, typeof b.endpoint === 'string' ? b.endpoint : undefined);
     return Response.json({ redirect: HOME_BY_ROLE[user.role] });
   });
 }
