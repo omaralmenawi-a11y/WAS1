@@ -24,9 +24,10 @@ export const msgCancelled = (p: { number: number; reason?: string | null }): Msg
   body: p.reason || 'تم إلغاء الطلب',
 });
 
-export const msgReminder = (p: { names: string[]; time: string }): Msg => ({
+export const msgReminder = (p: { names: string[]; time: string; minutesLeft: number }): Msg => ({
   title: 'تذكير بالانصراف',
-  body: `انصراف ${join(p.names)} الساعة ${p.time}، بعد 15 دقيقة.`,
+  // A catch-up reminder (under 15 minutes left) must not claim "after 15 minutes".
+  body: p.minutesLeft >= 15 ? `انصراف ${join(p.names)} الساعة ${p.time}، بعد 15 دقيقة.` : `انصراف ${join(p.names)} الساعة ${p.time}.`,
 });
 
 export const msgEndOfDay = (p: { names: string[]; gate: string }): Msg => ({

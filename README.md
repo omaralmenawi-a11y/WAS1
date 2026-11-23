@@ -57,14 +57,26 @@ npm run e2e -- --trace off    # رحلة الاستلام كاملة (متصفح
 npm run smoke                 # تشغيل الخادم في وضع التطوير والإنتاج
 ```
 
-يضبط اختبار e2e الوقت عبر `WASL_FAKE_NOW` (يوم أحد 12:00 بتوقيت الرياض) وساعة المتصفح. على جهاز عادي شغّل مرة واحدة `npx playwright install chromium`؛ وإن كان Chromium مثبتاً في مسار آخر فاستخدم `PW_CHROMIUM_PATH`.
+يضبط اختبار e2e الوقت عبر `WASL_FAKE_NOW` (يوم أحد 11:45 بتوقيت الرياض، قبل انصراف الصف الأول بـ15 دقيقة) وساعة المتصفح. على جهاز عادي شغّل مرة واحدة `npx playwright install chromium`؛ وإن كان Chromium مثبتاً في مسار آخر فاستخدم `PW_CHROMIUM_PATH`.
 
 - البناء: `npm run build` ثم `npm start` (يضبط `NODE_ENV=production`؛ لا يعمل `WASL_FAKE_NOW` في هذا الوضع).
 - فحص الخادم (smoke): يشغّل `server.ts` في وضع التطوير ثم يبني ويشغّل `dist/server.js` في وضع الإنتاج ويتوقع 200 من `/login`. شغّله بعد أي تغيير في `server.ts` أو وحدات المقبس (`src/lib/realtime.ts` وما تستورده)، فهذه يجب ألا تستورد `next/headers` أو `next/navigation`.
 
+## الإشعارات
+
+يصل ولي الأمر تذكير قبل 15 دقيقة من انصراف أبنائه، وإشعار عند انتهاء الدوام، وإشعارات حالة الطلب (قيد التجهيز، جاهز للاستلام، تم التسليم، ملغى). كل إشعار يظهر في صندوق الإشعارات داخل التطبيق (`/parent/notifications`) ويعمل الصندوق حتى بدون إشعارات الدفع.
+
+لتفعيل إشعارات الدفع (Web Push):
+
+1. ولّد المفاتيح: `npm run vapid`.
+2. ضع القيم في `.env`: `VAPID_PUBLIC_KEY` و`VAPID_PRIVATE_KEY` و`VAPID_SUBJECT` (مثل `mailto:admin@example.com`). بدونها يُتخطى الدفع مع تحذير عند التشغيل ولا يتعطل الخادم.
+3. في الإنتاج يلزم HTTPS، فالمتصفحات ترفض الدفع على HTTP (ما عدا `localhost`).
+4. على iPhone يلزم iOS 16.4 أو أحدث، وعلى المستخدم أولاً «إضافة إلى الشاشة الرئيسية» ثم فتح التطبيق منها وتفعيل الإشعارات.
+
+يفحص الخادم مواعيد الانصراف كل دقيقة؛ ويمكن تغيير الفاصل للاختبار بالمتغير `NOTIFY_TICK_MS` (بالمللي ثانية).
+
 ## المرحلة الثانية (Phase 2)
 
-- الإشعارات
 - المفوّضون مع الصورة
 - التسليم اليدوي
 - التقارير
@@ -120,11 +132,24 @@ npm run e2e -- --trace off    # full pickup journey (Chromium, wasl_e2e)
 npm run smoke                 # boots dev and production servers
 ```
 
-The e2e run fixes the server clock with `WASL_FAKE_NOW` (next Sunday 12:00 Riyadh) and the browser clock to match. On a normal machine run `npx playwright install chromium` once; set `PW_CHROMIUM_PATH` if Chromium is installed elsewhere. `npm start` sets `NODE_ENV=production` (fake time is ignored there). Run `npm run smoke` after touching `server.ts` or the socket modules (`src/lib/realtime.ts` and its imports must not import `next/headers` or `next/navigation`).
+The e2e run fixes the server clock with `WASL_FAKE_NOW` (next Sunday 11:45 Riyadh, 15 minutes before the first seeded dismissal) with a 2 s notification tick and the browser clock to match. On a normal machine run `npx playwright install chromium` once; set `PW_CHROMIUM_PATH` if Chromium is installed elsewhere. `npm start` sets `NODE_ENV=production` (fake time is ignored there). Run `npm run smoke` after touching `server.ts` or the socket modules (`src/lib/realtime.ts` and its imports must not import `next/headers` or `next/navigation`).
+
+## Notifications
+
+Guardians get a reminder 15 minutes before their children's dismissal, an end-of-day notice at dismissal time, and pickup status notices (preparing, ready, delivered, cancelled). Every notification also appears in the in-app inbox (`/parent/notifications`), which works without push.
+
+To enable Web Push:
+
+1. Generate keys: `npm run vapid`.
+2. Put the three values in `.env`: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (for example `mailto:admin@example.com`). Without them push is skipped with a startup warning; the server does not crash.
+3. Production needs HTTPS: browsers refuse push over plain HTTP (except `localhost`).
+4. iPhone needs iOS 16.4 or later, and the user must first add the app to the Home Screen, open it from there, then enable notifications.
+
+The server checks dismissal times every minute; set `NOTIFY_TICK_MS` (milliseconds) to change the interval, e.g. for tests.
 
 ## Phase 2
 
-Notifications, delegates with photo, manual handover, reports, privacy pages, retention jobs, deployment.
+Delegates with photo, manual handover, reports, privacy pages, retention jobs, deployment.
 
 ## Security
 

@@ -26,7 +26,8 @@ describe('notification messages', () => {
     expect(msgCancelled({ number: 3, reason: null }).body).toBe('تم إلغاء الطلب');
   });
   it('reminder and end of day', () => {
-    expect(msgReminder({ names: ['أحمد'], time: '12:30' })).toEqual({ title: 'تذكير بالانصراف', body: 'انصراف أحمد الساعة 12:30، بعد 15 دقيقة.' });
+    expect(msgReminder({ names: ['أحمد'], time: '12:30', minutesLeft: 15 })).toEqual({ title: 'تذكير بالانصراف', body: 'انصراف أحمد الساعة 12:30، بعد 15 دقيقة.' });
+    expect(msgReminder({ names: ['أحمد'], time: '12:30', minutesLeft: 5 }).body).toBe('انصراف أحمد الساعة 12:30.');
     expect(msgEndOfDay({ names: ['أحمد', 'بدر'], gate: 'بوابة 1' })).toEqual({ title: 'انتهى الدوام', body: 'انتهى دوام أحمد و بدر. بوابة 1.' });
   });
   it('formatRiyadhTime is HH:MM in Riyadh', () => {

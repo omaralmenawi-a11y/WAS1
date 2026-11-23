@@ -26,14 +26,14 @@ export async function runDismissalNotifications(at: Date = now()): Promise<{ rem
   if (students.length === 0) return { reminders: 0, endOfDay: 0 };
 
   const ctxs = await buildScheduleCtxs(students, day.date);
-  type Due = { kind: 'REMINDER' | 'END_OF_DAY'; time: string; student: (typeof students)[number] };
+  type Due = { kind: 'REMINDER' | 'END_OF_DAY'; time: string; minutesLeft: number; student: (typeof students)[number] };
   const due: Due[] = [];
   for (const s of students) {
     const time = dismissalFor(ctxs.get(s.id)!, day.date);
     if (!time) continue;
     const d = toMin(time);
-    if (d - REMINDER_LEAD_MIN <= day.minutes && day.minutes < d) due.push({ kind: 'REMINDER', time, student: s });
-    else if (d <= day.minutes && day.minutes < d + END_OF_DAY_WINDOW_MIN) due.push({ kind: 'END_OF_DAY', time, student: s });
+    if (d - REMINDER_LEAD_MIN <= day.minutes && day.minutes < d) due.push({ kind: 'REMINDER', time, minutesLeft: d - day.minutes, student: s });
+    else if (d <= day.minutes && day.minutes < d + END_OF_DAY_WINDOW_MIN) due.push({ kind: 'END_OF_DAY', time, minutesLeft: 0, student: s });
   }
   if (due.length === 0) return { reminders: 0, endOfDay: 0 };
 
@@ -51,14 +51,14 @@ export async function runDismissalNotifications(at: Date = now()): Promise<{ rem
   const delivered = new Set(items.filter((i) => i.status === 'DELIVERED').map((i) => i.studentId));
 
   // group per (kind, time, guardian)
-  const groups = new Map<string, { kind: Due['kind']; time: string; userId: string; entries: Entry[] }>();
+  const groups = new Map<string, { kind: Due['kind']; time: string; minutesLeft: number; userId: string; entries: Entry[] }>();
   for (const x of due) {
     const id = x.student.id;
     if (delivered.has(id)) continue;
     if (x.kind === 'REMINDER' && busy.has(id)) continue;
     for (const userId of guardians.get(id) ?? []) {
       const key = `${x.kind}|${x.time}|${userId}`;
-      const g = groups.get(key) ?? { kind: x.kind, time: x.time, userId, entries: [] };
+      const g = groups.get(key) ?? { kind: x.kind, time: x.time, minutesLeft: x.minutesLeft, userId, entries: [] };
       g.entries.push({ studentId: id, name: firstName(x.student.fullName), gate: gateName.get(x.student.defaultGateId) ?? '' });
       groups.set(key, g);
     }
@@ -70,9 +70,10 @@ export async function runDismissalNotifications(at: Date = now()): Promise<{ rem
     const names = g.entries.map((e) => e.name);
     const msg =
       g.kind === 'REMINDER'
-        ? msgReminder({ names, time: g.time })
+        ? msgReminder({ names, time: g.time, minutesLeft: g.minutesLeft })
         : msgEndOfDay({ names, gate: [...new Set(g.entries.map((e) => e.gate).filter(Boolean))].join('، ') });
     const r = await notify([g.userId], { kind: g.kind, title: msg.title, body: msg.body, url: '/parent' }, {
+      // Known limitation: a sibling skipped at reminder time whose request is then cancelled is still covered by the end-of-day notice.
       dedupeKey: (u) => `${g.kind}:${day.date}:${g.time}:${u}`,
     });
     if (g.kind === 'REMINDER') reminders += r.created;

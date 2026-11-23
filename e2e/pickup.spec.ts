@@ -47,6 +47,13 @@ test('full pickup journey: register, request, prepare, ready, code, deliver', as
 
   // Two siblings linked by phone.
   for (const n of SIBLINGS) await expect(guardian.getByRole('heading', { name: n })).toBeVisible();
+
+  // Clock is 11:45, 15 min before the first sibling's 12:00 dismissal: the reminder arrives live (no reload).
+  await expect(guardian.getByTestId('bell-count')).toHaveText('1', { timeout: 70_000 });
+  await guardian.getByRole('link', { name: /الإشعارات/ }).click();
+  await guardian.waitForURL('**/parent/notifications');
+  await expect(guardian.getByText('تذكير بالانصراف')).toBeVisible();
+  await guardian.goto('/parent');
   await expect(guardian.getByRole('checkbox')).toHaveCount(2);
   for (const n of SIBLINGS) await guardian.getByLabel(`اختيار ${n}`).check();
 
@@ -99,6 +106,11 @@ test('full pickup journey: register, request, prepare, ready, code, deliver', as
   // Guardian sees delivered; the board no longer shows the number.
   await expect(guardian.getByText(/تم التسليم الساعة/)).toBeVisible();
   await expect(board.getByText(number, { exact: true })).toHaveCount(0, { timeout: 10_000 });
+
+  // The READY notice is in the guardian's inbox (alongside the earlier reminder).
+  await guardian.goto('/parent/notifications');
+  await expect(guardian.getByText(/جاهز(ون)? للاستلام/).first()).toBeVisible();
+  await expect(guardian.getByText('تذكير بالانصراف')).toBeVisible();
 
   // School dashboard: deliveredToday counts delivered items (two siblings = 2).
   const admin = await newPage(browser);

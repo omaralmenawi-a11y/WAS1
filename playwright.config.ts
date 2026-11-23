@@ -3,9 +3,12 @@ import 'dotenv/config';
 
 const PORT = 3107;
 
-/** Next Sunday 12:00 Asia/Riyadh (= 09:00Z; Riyadh has no DST). Inside the seeded pickup window. */
+/**
+ * Next Sunday 11:45 Asia/Riyadh (= 08:45Z; Riyadh has no DST). 15 minutes before the first seeded dismissal (12:00), so the
+ * reminder fires for the first sibling; still inside both siblings' pickup windows (open 60 min before 12:00 / 12:30).
+ */
 export function fakeNow(from = new Date()): Date {
-  const d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate() + 1, 9, 0, 0));
+  const d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate() + 1, 8, 45, 0));
   while (d.getUTCDay() !== 0) d.setUTCDate(d.getUTCDate() + 1);
   return d;
 }
@@ -52,6 +55,7 @@ export default defineConfig({
       OTP_MODE: 'dev',
       NODE_ENV: 'development',
       WASL_FAKE_NOW: FAKE_NOW,
+      NOTIFY_TICK_MS: '2000',
       APP_URL: `http://localhost:${PORT}`,
     },
   },

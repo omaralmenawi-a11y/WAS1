@@ -78,6 +78,7 @@ describe('runDismissalNotifications', () => {
     await setup();
     const g = await guardian(P1);
     expect(await runDismissalNotifications(at('12:10'))).toEqual({ reminders: 1, endOfDay: 0 });
+    expect((await rows(g.id, 'REMINDER'))[0].body).toBe('انصراف سارة الساعة 12:15.');
     await prisma.notification.deleteMany({});
     expect(await runDismissalNotifications(at('12:20'))).toEqual({ reminders: 0, endOfDay: 1 });
     expect(await rows(g.id, 'REMINDER')).toHaveLength(0);
