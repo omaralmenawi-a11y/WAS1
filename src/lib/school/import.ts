@@ -47,7 +47,7 @@ export function parseStudentSheet(
     }
     const sheet = wb.Sheets[wb.SheetNames[0]];
     if (!sheet) return fail('الملف فارغ');
-    grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '', blankrows: false });
+    grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '', blankrows: true });
   } catch {
     return fail('تعذر قراءة الملف');
   }

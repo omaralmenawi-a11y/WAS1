@@ -8,6 +8,8 @@ const MAX_BYTES = 5 * 1024 * 1024;
 export const POST = (req: Request) =>
   handle(async () => {
     const actor = await requireUser(req);
+    const len = Number(req.headers.get('content-length') ?? 0);
+    if (len > MAX_BYTES + 64 * 1024) throw new ValidationError('حجم الملف كبير جداً (الحد ٥ ميجابايت)');
     let form: FormData;
     try {
       form = await req.formData();

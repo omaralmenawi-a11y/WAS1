@@ -55,6 +55,15 @@ describe('parseStudentSheet', () => {
     expect(r.warnings[0].row).toBe(3);
   });
 
+  it('reports the true spreadsheet row after blank lines', () => {
+    const r = parseStudentSheet(
+      csv([H, ['1', 'أ', 'ف', 'ص', 'ب', '0501234567', '', ''], [',,,,,,,'.split(',').join(',')].map((x) => x.split(',')).flat(), ['3', 'ج', 'ف', 'ص', 'ب', '123', '', '']]),
+      'a.csv',
+    );
+    expect(r.rows).toHaveLength(1);
+    expect(r.errors.map((e) => e.row)).toEqual([4]);
+  });
+
   it('missing header column is reported', () => {
     const r = parseStudentSheet(csv([H.slice(0, 4), ['1', 'أ', 'ف', 'ص']]), 'a.csv');
     expect(r.rows).toEqual([]);
