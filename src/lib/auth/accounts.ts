@@ -6,6 +6,7 @@ import { now } from '../time';
 import { normalizeUsername, parseIdentifier } from './identifier';
 import { verifyOtp } from './otp';
 import { hashPassword, verifyPassword } from './password';
+import { destroyOtherSessions } from './session';
 
 export const MIN_PASSWORD = 8;
 
@@ -104,7 +105,8 @@ export async function resetPassword(input: { identifier: string; code: string; p
   ]);
 }
 
-export async function changePassword(userId: string, current: string, next: string): Promise<void> {
+/** Changes the password and ends every other session of the user (the one holding currentToken stays). */
+export async function changePassword(userId: string, current: string, next: string, currentToken?: string): Promise<void> {
   checkPassword(next);
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (!(await verifyPassword(user.passwordHash, current ?? ''))) throw new InvalidCredentials('كلمة المرور الحالية غير صحيحة');
@@ -112,4 +114,5 @@ export async function changePassword(userId: string, current: string, next: stri
     where: { id: userId },
     data: { passwordHash: await hashPassword(next), mustChangePassword: false },
   });
+  await destroyOtherSessions(userId, currentToken);
 }

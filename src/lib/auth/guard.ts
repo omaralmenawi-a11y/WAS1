@@ -1,7 +1,7 @@
 import type { Role, User } from '@prisma/client';
 import { redirect } from 'next/navigation';
 import { readSessionToken } from '../http';
-import { Unauthorized } from '../errors';
+import { Forbidden, Unauthorized } from '../errors';
 import { HOME_BY_ROLE } from './home';
 import { getSessionUser } from './session';
 
@@ -9,9 +9,10 @@ export async function currentUser(): Promise<User | null> {
   return getSessionUser(await readSessionToken());
 }
 
-export async function requireUser(): Promise<User> {
+export async function requireUser(opts: { allowMustChangePassword?: boolean } = {}): Promise<User> {
   const u = await currentUser();
   if (!u) throw new Unauthorized();
+  if (u.mustChangePassword && !opts.allowMustChangePassword) throw new Forbidden('يجب تغيير كلمة المرور المؤقتة أولاً', 'MUST_CHANGE_PASSWORD');
   return u;
 }
 

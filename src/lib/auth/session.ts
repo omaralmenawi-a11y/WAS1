@@ -28,3 +28,8 @@ export async function getSessionUser(token: string | undefined): Promise<User | 
 export async function destroySession(token: string): Promise<void> {
   await prisma.session.deleteMany({ where: { tokenHash: sha256(token) } });
 }
+
+/** Ends every session of the user except the one holding keepToken (all of them when it is absent). */
+export async function destroyOtherSessions(userId: string, keepToken?: string): Promise<void> {
+  await prisma.session.deleteMany({ where: { userId, ...(keepToken ? { tokenHash: { not: sha256(keepToken) } } : {}) } });
+}

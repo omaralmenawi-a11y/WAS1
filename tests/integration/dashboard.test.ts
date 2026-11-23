@@ -195,6 +195,7 @@ describe('regenerateBoardToken', () => {
 
 describe('routes', () => {
   async function cookieFor(u: { id: string; role: Role }) {
+    await prisma.user.update({ where: { id: u.id }, data: { mustChangePassword: false } }); // temp password already changed
     return { cookie: `wasl_session=${await createSession(u.id, u.role)}` };
   }
   it('GET dashboard / audit (limit capped) and POST board-token', async () => {

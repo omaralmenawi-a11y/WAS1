@@ -6,10 +6,19 @@ import { parseCookie, SESSION_COOKIE } from './cookies';
 
 // No Next.js imports here: realtime.ts (loaded by server.ts before next().prepare()) depends on this module.
 
-/** API-route auth: session user from the request cookie, else 401. */
-export async function requireUser(req: Request): Promise<User> {
+export const MUST_CHANGE_PASSWORD = 'MUST_CHANGE_PASSWORD';
+
+/**
+ * API-route auth: session user from the request cookie, else 401. A user who must change the
+ * temporary password gets 403 MUST_CHANGE_PASSWORD everywhere except the password route
+ * (allowMustChangePassword); logout needs no user.
+ */
+export async function requireUser(req: Request, opts: { allowMustChangePassword?: boolean } = {}): Promise<User> {
   const user = await getSessionUser(parseCookie(req.headers.get('cookie'), SESSION_COOKIE));
   if (!user) throw new Unauthorized();
+  if (user.mustChangePassword && !opts.allowMustChangePassword) {
+    throw new Forbidden('يجب تغيير كلمة المرور المؤقتة أولاً', MUST_CHANGE_PASSWORD);
+  }
   return user;
 }
 

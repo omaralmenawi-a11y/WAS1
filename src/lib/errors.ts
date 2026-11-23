@@ -25,8 +25,8 @@ export class Unauthorized extends AppError {
   }
 }
 export class Forbidden extends AppError {
-  constructor(messageAr = 'غير مسموح لك بهذا الإجراء') {
-    super('FORBIDDEN', messageAr, 403);
+  constructor(messageAr = 'غير مسموح لك بهذا الإجراء', code = 'FORBIDDEN') {
+    super(code, messageAr, 403);
   }
 }
 export class NotFound extends AppError {

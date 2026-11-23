@@ -172,6 +172,7 @@ describe('listStudents: server-side search and pagination', () => {
     expect((await listStudents(s.admin, { search: '0500000042' })).rows.map((x) => x.externalId)).toEqual(['S042']);
     expect((await listStudents(s.admin, { search: '00042' })).rows.map((x) => x.externalId)).toEqual(['S042']);
 
+    await prisma.user.update({ where: { id: s.admin.id }, data: { mustChangePassword: false } }); // temp password already changed
     const res = await getStudents(
       new Request('http://x/api/school/students?search=%D8%B7%D8%A7%D9%84%D8%A8&page=2', {
         headers: { cookie: `wasl_session=${await createSession(s.admin.id, s.admin.role)}` },
