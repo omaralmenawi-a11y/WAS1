@@ -36,6 +36,17 @@ async function loadRequest(id: string): Promise<PickupRequest> {
   return r;
 }
 
+/** Row lock serialising mutations on one request; returns the fresh row. */
+async function lockRequest(tx: Tx, id: string): Promise<PickupRequest> {
+  await tx.$queryRaw`SELECT id FROM "PickupRequest" WHERE id = ${id} FOR UPDATE`;
+  const r = await tx.pickupRequest.findUnique({ where: { id } });
+  if (!r) throw new NotFound();
+  return r;
+}
+
+const isToday = (req: PickupRequest, at: Date) => req.day.toISOString().slice(0, 10) === riyadhDay(at).date;
+const STALE = 'هذا الطلب لم يعد صالحاً';
+
 /** Closes the request when no item is active any more; clears the parent's last location. */
 async function closeIfDone(tx: Tx, requestId: string, at: Date): Promise<boolean> {
   const active = await tx.pickupItem.count({ where: { requestId, status: { in: ACTIVE } } });
@@ -72,6 +83,20 @@ export async function createRequest(user: User, studentIds: string[], at: Date =
   for (let attempt = 1; ; attempt++) {
     try {
       const request = await prisma.$transaction(async (tx) => {
+        const stale = await tx.pickupRequest.findMany({
+          where: { open: true, day: { lt: day }, items: { some: { studentId: { in: ids }, status: { in: ACTIVE } } } },
+          select: { id: true, schoolId: true },
+          orderBy: { id: 'asc' },
+        });
+        for (const st of stale) {
+          await lockRequest(tx, st.id);
+          await tx.pickupItem.updateMany({
+            where: { requestId: st.id, status: { in: ACTIVE } },
+            data: { status: 'CANCELLED', cancelledAt: at, cancelReason: 'انتهى اليوم الدراسي' },
+          });
+          await closeIfDone(tx, st.id, at);
+          await writeAudit({ schoolId: st.schoolId, actorId: user.id, action: 'PICKUP_AUTO_CLOSED', entity: 'PickupRequest', entityId: st.id, data: {} }, tx);
+        }
         const busy = await tx.pickupItem.findFirst({
           where: { studentId: { in: ids }, status: { in: ACTIVE } },
           include: { student: { select: { fullName: true } }, request: { select: { requesterId: true } } },
@@ -121,6 +146,7 @@ export async function advanceItem(staff: User, itemId: string, action: 'PREPARE'
   const to = nextStatus(item.status, action);
 
   const updated = await prisma.$transaction(async (tx) => {
+    await lockRequest(tx, item.requestId);
     const res = await tx.pickupItem.updateMany({
       where: { id: itemId, status: item.status },
       data: action === 'PREPARE' ? { status: to, preparingAt: at } : { status: to, readyAt: at },
@@ -143,8 +169,9 @@ export async function changeGate(staff: User, requestId: string, gateId: string,
   await assertBranchAccess(staff, req.branchId);
   const gate = await prisma.gate.findFirst({ where: { id: gateId, branchId: req.branchId } });
   if (!gate) throw new NotFound();
-  if (!req.open) throw new Conflict('الطلب مغلق');
   await prisma.$transaction(async (tx) => {
+    const locked = await lockRequest(tx, requestId);
+    if (!locked.open) throw new Conflict('الطلب مغلق');
     await tx.pickupRequest.update({ where: { id: requestId }, data: { gateId } });
     await writeAudit(
       { schoolId: req.schoolId, actorId: staff.id, action: 'GATE_CHANGED', entity: 'PickupRequest', entityId: requestId, data: { from: req.gateId, to: gateId, at: at.toISOString() } },
@@ -194,6 +221,7 @@ export async function verifyRecipient(staff: User, input: VerifyInput, at: Date 
     const req = await prisma.pickupRequest.findUnique({ where: { id: requested } });
     if (!req) return fail();
     await assertBranchAccess(staff, req.branchId);
+    if (!isToday(req, at)) throw new ValidationError(STALE);
     if (!req.open || !checkPickupCode(req.id, code, at)) return fail();
     requestId = req.id;
   } else {
@@ -206,6 +234,8 @@ export async function verifyRecipient(staff: User, input: VerifyInput, at: Date 
   }
 
   const result = await prisma.$transaction(async (tx) => {
+    const locked = await lockRequest(tx, requestId);
+    if (!locked.open) throw new ValidationError(WRONG_CODE);
     const req = await tx.pickupRequest.update({
       where: { id: requestId },
       data: { verifiedAt: at, verifiedById: staff.id, verifyMethod: method },
@@ -235,11 +265,13 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
   if (ids.length === 0) throw new ValidationError('اختر عنصراً واحداً على الأقل');
   const req = await loadRequest(requestId);
   await assertBranchAccess(staff, req.branchId);
-  if (!req.open) throw new Conflict('الطلب مغلق');
-  const age = req.verifiedAt ? at.getTime() - req.verifiedAt.getTime() : Infinity;
-  if (age < 0 || age > VERIFY_VALID_MS) throw new Conflict('يجب التحقق من المستلم قبل التسليم');
 
   await prisma.$transaction(async (tx) => {
+    const cur = await lockRequest(tx, requestId);
+    if (!isToday(cur, at)) throw new ValidationError(STALE);
+    if (!cur.open) throw new Conflict('الطلب مغلق');
+    const age = cur.verifiedAt ? at.getTime() - cur.verifiedAt.getTime() : Infinity;
+    if (age < 0 || age > VERIFY_VALID_MS) throw new Conflict('يجب التحقق من المستلم قبل التسليم');
     const res = await tx.pickupItem.updateMany({
       where: { id: { in: ids }, requestId, status: 'READY' },
       data: { status: nextStatus('READY', 'DELIVER'), deliveredAt: at, deliveredById: staff.id },
@@ -268,6 +300,7 @@ export async function cancelRequest(actor: User, requestId: string, reasonAr?: s
   }
 
   await prisma.$transaction(async (tx) => {
+    await lockRequest(tx, requestId);
     const res = await tx.pickupItem.updateMany({
       where: { requestId, status: { in: ACTIVE } },
       data: { status: 'CANCELLED', cancelledAt: at, cancelReason: reason },

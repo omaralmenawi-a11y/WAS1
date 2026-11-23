@@ -9,6 +9,7 @@ import { Conflict, NotFound, RateLimitError, ValidationError } from '../../src/l
 import type { User } from '@prisma/client';
 
 process.env.PICKUP_CODE_SECRET ||= 'test-secret';
+import { resetDb as resetDbLocal } from './setup';
 
 // Mon 2026-11-23 12:30 Riyadh (dismissal 12:30)
 const T = new Date('2026-11-23T09:30:00Z');
@@ -204,6 +205,64 @@ describe('lifecycle', () => {
     expect(await prisma.auditLog.count({ where: { action: 'GATE_CHANGED' } })).toBe(1);
     const s2 = await mkSchool('b');
     await expect(changeGate(staff, r.id, s2.gate.id, T)).rejects.toThrow(NotFound);
+  });
+});
+
+describe('concurrency and stale requests', () => {
+  async function ready(n: number) {
+    const ctx = await setup();
+    const r = await createRequest(ctx.g, [ctx.a.id, ctx.b.id], T);
+    for (const i of r.items) { await advanceItem(ctx.staff, i.id, 'PREPARE', T); await advanceItem(ctx.staff, i.id, 'READY', T); }
+    await verifyRecipient(ctx.staff, { requestId: r.id, code: pickupCode(r.id, T) }, T);
+    await prisma.pickupRequest.update({ where: { id: r.id }, data: { lat: 1, lng: 2, locationAt: T, etaSeconds: 5 } });
+    return { ...ctx, r, n };
+  }
+  const expectClosed = async (id: string) =>
+    expect(await prisma.pickupRequest.findUniqueOrThrow({ where: { id } })).toMatchObject({ open: false, lat: null, lng: null, locationAt: null, etaSeconds: null });
+
+  it('concurrent delivery of both siblings closes the request', async () => {
+    for (let k = 0; k < 5; k++) {
+      await resetDbLocal();
+      const { r, staff } = await ready(2);
+      await Promise.all(r.items.map((i) => deliverItems(staff, r.id, [i.id], T)));
+      await expectClosed(r.id);
+    }
+  });
+
+  it('concurrent deliver + cancel closes the request', async () => {
+    for (let k = 0; k < 5; k++) {
+      await resetDbLocal();
+      const { r, staff } = await ready(2);
+      // cancel is per request in this API, so cancel via item update racing a deliver of the other
+      await Promise.all([
+        deliverItems(staff, r.id, [r.items[0].id], T),
+        cancelRequest(staff, r.id, 'سبب', T),
+      ].map((p) => p.catch((e) => e)));
+      await expectClosed(r.id);
+    }
+  });
+
+  it('stale open request from yesterday is auto-closed on a new request', async () => {
+    const { a, g } = await setup();
+    const yesterday = new Date(T.getTime() - 24 * 3600_000);
+    const old = await createRequest(g, [a.id], yesterday);
+    await prisma.pickupRequest.update({ where: { id: old.id }, data: { lat: 1, lng: 2, locationAt: yesterday } });
+    const fresh = await createRequest(g, [a.id], T);
+    expect(fresh.number).toBe(1);
+    await expectClosed(old.id);
+    const item = await prisma.pickupItem.findFirstOrThrow({ where: { requestId: old.id } });
+    expect(item).toMatchObject({ status: 'CANCELLED', cancelReason: 'انتهى اليوم الدراسي' });
+    expect(await prisma.auditLog.count({ where: { action: 'PICKUP_AUTO_CLOSED' } })).toBe(1);
+  });
+
+  it('verify and deliver reject a request from another day', async () => {
+    const { a, g, staff } = await setup();
+    const yesterday = new Date(T.getTime() - 24 * 3600_000);
+    const old = await createRequest(g, [a.id], yesterday);
+    await expect(verifyRecipient(staff, { qr: qrPayload(old.id, T) }, T)).rejects.toThrow('هذا الطلب لم يعد صالحاً');
+    await expect(verifyRecipient(staff, { requestId: old.id, code: pickupCode(old.id, T) }, T)).rejects.toThrow(ValidationError);
+    await prisma.pickupRequest.update({ where: { id: old.id }, data: { verifiedAt: T } });
+    await expect(deliverItems(staff, old.id, [old.items[0].id], T)).rejects.toThrow('هذا الطلب لم يعد صالحاً');
   });
 });
 
