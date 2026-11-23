@@ -226,3 +226,12 @@ model LoginAttempt {
 
   @@index([identifier, createdAt])
 }
+
+model VerifyAttempt {
+  id        String   @id @default(cuid())
+  staffId   String
+  ok        Boolean
+  createdAt DateTime @default(now())
+
+  @@index([staffId, createdAt])
+}
