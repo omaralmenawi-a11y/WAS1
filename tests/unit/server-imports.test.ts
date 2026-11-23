@@ -26,5 +26,7 @@ describe('socket layer imported by server.ts', () => {
     expect(typeof mod.notify).toBe('function');
     const push = await import('@/lib/notify/push');
     expect(typeof push.pushEnabled).toBe('function');
+    const dismissal = await import('@/lib/notify/dismissal');
+    expect(typeof dismissal.runDismissalNotifications).toBe('function');
   });
 });

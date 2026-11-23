@@ -5,6 +5,7 @@ import { attachRealtime, setIo } from './src/lib/realtime';
 import { closeStaleRequests } from './src/lib/pickup/service';
 import { assertPickupCodeSecret } from './src/lib/pickup/code';
 import { checkProductionEnv } from './src/lib/env-check';
+import { runDismissalNotifications } from './src/lib/notify/dismissal';
 
 const STALE_SWEEP_MS = 10 * 60_000;
 
@@ -13,6 +14,23 @@ function sweepStale(): void {
   closeStaleRequests()
     .then((n) => n > 0 && console.log(`closed ${n} stale pickup request(s)`))
     .catch((e) => console.error('stale request sweep failed', e));
+}
+
+const DEFAULT_NOTIFY_TICK_MS = 60_000;
+let notifyRunning = false;
+
+/** Dismissal reminders / end-of-day notices. Skips while the previous tick is still running. Never throws. */
+async function notifyTick(): Promise<void> {
+  if (notifyRunning) return;
+  notifyRunning = true;
+  try {
+    const r = await runDismissalNotifications();
+    if (r.reminders || r.endOfDay) console.log(`dismissal notifications: ${r.reminders} reminder(s), ${r.endOfDay} end-of-day`);
+  } catch (e) {
+    console.error('dismissal notification tick failed', e);
+  } finally {
+    notifyRunning = false;
+  }
 }
 
 const dev = process.env.NODE_ENV !== 'production';
@@ -44,4 +62,7 @@ app.prepare().then(() => {
   httpServer.listen(port, () => console.log(`> WASL ready on http://localhost:${port}`));
   sweepStale();
   setInterval(sweepStale, STALE_SWEEP_MS).unref();
+  const tickMs = Number(process.env.NOTIFY_TICK_MS);
+  void notifyTick();
+  setInterval(() => void notifyTick(), Number.isFinite(tickMs) && tickMs > 0 ? tickMs : DEFAULT_NOTIFY_TICK_MS).unref();
 });
