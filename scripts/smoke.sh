@@ -8,8 +8,11 @@ cd "$(dirname "$0")/.."
 
 PID=""
 LOG="$(mktemp)"
-cleanup() { [[ -n "$PID" ]] && kill "$PID" 2>/dev/null || true; wait 2>/dev/null || true; rm -f "$LOG"; }
+# Each server runs in its own process group (setsid), so killing -PID also stops any child processes it started.
+stop() { [[ -n "$PID" ]] || return 0; kill -- "-$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; PID=""; }
+cleanup() { stop; rm -f "$LOG"; }
 trap cleanup EXIT
+trap "exit 130" INT TERM
 
 free_port() { node -e "const s=require('net').createServer();s.listen(0,()=>{console.log(s.address().port);s.close()})"; }
 
@@ -17,7 +20,7 @@ check() { # label, then the command that starts the server
   local label="$1"; shift
   local port; port="$(free_port)"
   : > "$LOG"
-  PORT="$port" "$@" > "$LOG" 2>&1 &
+  PORT="$port" setsid "$@" > "$LOG" 2>&1 &
   PID=$!
   for _ in $(seq 1 90); do
     grep -q 'WASL ready' "$LOG" && break
@@ -32,10 +35,10 @@ check() { # label, then the command that starts the server
     echo "[$label] FAIL: GET /login -> $code"; cat "$LOG"; exit 1
   fi
   echo "[$label] OK: GET /login -> 200"
-  kill "$PID"; wait "$PID" 2>/dev/null || true; PID=""
+  stop
 }
 
-check dev env NODE_ENV=development npx tsx server.ts
+check dev env NODE_ENV=development node_modules/.bin/tsx server.ts
 npm run build
 check prod env NODE_ENV=production node dist/server.js
 echo "smoke: all OK"

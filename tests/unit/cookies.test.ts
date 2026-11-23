@@ -16,4 +16,17 @@ describe('parseCookie', () => {
   it('returns undefined on malformed encoding instead of throwing', () => {
     expect(parseCookie('wasl_session=%E0%A4%A', 'wasl_session')).toBeUndefined();
   });
+  it('keeps = inside the value', () => {
+    expect(parseCookie('wasl_session=a=b==; x=1', 'wasl_session')).toBe('a=b==');
+  });
+  it('tolerates whitespace around ;', () => {
+    expect(parseCookie('a=1 ;   wasl_session=tok  ;b=2', 'wasl_session')).toBe('tok');
+  });
+  it('returns the first value when the name repeats', () => {
+    expect(parseCookie('wasl_session=first; wasl_session=second', 'wasl_session')).toBe('first');
+  });
+  it('returns undefined for an empty value', () => {
+    expect(parseCookie('wasl_session=; a=1', 'wasl_session')).toBeUndefined();
+    expect(parseCookie('wasl_session=   ', 'wasl_session')).toBeUndefined();
+  });
 });
