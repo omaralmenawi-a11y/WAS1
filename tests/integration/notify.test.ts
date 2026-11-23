@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../../src/lib/db';
-import { notify } from '../../src/lib/notify';
+import { notify, setPushTimeoutMs } from '../../src/lib/notify';
 import { setPushSender, type PushSender } from '../../src/lib/notify/push';
 
 type Sub = { endpoint: string; p256dh: string; auth: string };
@@ -97,5 +97,22 @@ describe('notify', () => {
     setPushSender(sender);
     await notify([u.id], { ...payload, tag: 'TEST:abc' });
     expect(JSON.parse(calls[0].payload).tag).toBe('TEST:abc');
+  });
+
+  it('a device that never answers counts as an error after the timeout; the others still get through', async () => {
+    const u = await mkUser();
+    await mkSub(u.id, 'https://e/hung');
+    await mkSub(u.id, 'https://e/ok');
+    setPushTimeoutMs(50);
+    try {
+      setPushSender({ send: (sub) => (sub.endpoint === 'https://e/hung' ? new Promise(() => {}) : Promise.resolve('ok')) });
+      const t0 = Date.now();
+      await expect(notify([u.id], payload)).resolves.toEqual({ created: 1, pushed: 1 });
+      expect(Date.now() - t0).toBeLessThan(2000);
+      const hung = await prisma.pushSubscription.findUniqueOrThrow({ where: { endpoint: 'https://e/hung' } });
+      expect(hung.lastSuccessAt).toBeNull(); // kept, not marked successful
+    } finally {
+      setPushTimeoutMs();
+    }
   });
 });
