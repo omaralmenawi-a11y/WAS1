@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { Prisma, type ItemStatus, type PickupItem, type PickupRequest, type Role, type User } from '@prisma/client';
 import { prisma } from '../db';
 import { writeAudit } from '../audit';
@@ -9,6 +10,7 @@ import { emitPickupChanged } from '../realtime';
 import { canRequestNow } from '../schedule';
 import { now, riyadhDay } from '../time';
 import { checkPickupCode, parseQr } from './code';
+import { etaSeconds, haversineMeters } from './eta';
 import { nextStatus } from './state';
 
 type Tx = Prisma.TransactionClient;
@@ -314,4 +316,74 @@ export async function cancelRequest(actor: User, requestId: string, reasonAr?: s
   });
   await notify([req.requesterId], 'PICKUP_CANCELLED', { requestId });
   await emitPickupChanged(requestId);
+}
+
+const MAX_ACCURACY_M = 500;
+const MIN_LOCATION_INTERVAL_MS = 10_000;
+const locationSchema = z.object({
+  lat: z.number({ message: 'الموقع غير صالح' }).min(-90, 'الموقع غير صالح').max(90, 'الموقع غير صالح'),
+  lng: z.number({ message: 'الموقع غير صالح' }).min(-180, 'الموقع غير صالح').max(180, 'الموقع غير صالح'),
+  accuracy: z.number({ message: 'دقة الموقع غير صالحة' }).min(0, 'دقة الموقع غير صالحة'),
+});
+
+/** Only the requester may touch a request's trip state; everyone else sees NotFound. */
+async function loadOwnRequest(user: User, requestId: string): Promise<PickupRequest> {
+  const req = await prisma.pickupRequest.findUnique({ where: { id: requestId } });
+  if (!req || req.requesterId !== user.id) throw new NotFound();
+  return req;
+}
+
+/**
+ * Stores the requester's last point (overwriting the previous one) and returns the ETA.
+ * Points less accurate than 500 m, or sent within 10 s of the stored one, are not stored.
+ * No audit row: location is private and high-frequency.
+ */
+export async function updateLocation(
+  user: User,
+  requestId: string,
+  input: { lat: number; lng: number; accuracy: number },
+  at: Date = now(),
+): Promise<{ etaSeconds: number | null }> {
+  const p = locationSchema.safeParse(input);
+  if (!p.success) throw new ValidationError(p.error.issues[0]?.message || 'بيانات غير صالحة');
+  const { lat, lng, accuracy } = p.data;
+  await loadOwnRequest(user, requestId);
+
+  const result = await prisma.$transaction(async (tx) => {
+    const cur = await lockRequest(tx, requestId);
+    if (!cur.open || !isToday(cur, at)) throw new Conflict(STALE);
+    if (accuracy > MAX_ACCURACY_M) return { etaSeconds: cur.etaSeconds, stored: false };
+    if (cur.locationAt && at.getTime() - cur.locationAt.getTime() < MIN_LOCATION_INTERVAL_MS) {
+      return { etaSeconds: cur.etaSeconds, stored: false };
+    }
+    const [branch, school] = await Promise.all([
+      tx.branch.findUniqueOrThrow({ where: { id: cur.branchId }, select: { lat: true, lng: true } }),
+      tx.school.findUniqueOrThrow({ where: { id: cur.schoolId }, select: { etaSpeedKmh: true } }),
+    ]);
+    const eta =
+      branch.lat == null || branch.lng == null
+        ? null
+        : etaSeconds(haversineMeters({ lat, lng }, { lat: branch.lat, lng: branch.lng }), school.etaSpeedKmh);
+    await tx.pickupRequest.update({ where: { id: requestId }, data: { lat, lng, locationAt: at, etaSeconds: eta } });
+    return { etaSeconds: eta, stored: true };
+  });
+  if (result.stored) await emitPickupChanged(requestId);
+  return { etaSeconds: result.etaSeconds };
+}
+
+/** Requester says "I have arrived". Idempotent: the first arrivedAt is kept. */
+export async function markArrived(user: User, requestId: string, at: Date = now()): Promise<void> {
+  const req = await loadOwnRequest(user, requestId);
+  const changed = await prisma.$transaction(async (tx) => {
+    const cur = await lockRequest(tx, requestId);
+    if (!cur.open || !isToday(cur, at)) throw new Conflict(STALE);
+    if (cur.arrivedAt) return false;
+    await tx.pickupRequest.update({ where: { id: requestId }, data: { arrivedAt: at } });
+    await writeAudit(
+      { schoolId: req.schoolId, actorId: user.id, action: 'PICKUP_ARRIVED', entity: 'PickupRequest', entityId: requestId, data: {} },
+      tx,
+    );
+    return true;
+  });
+  if (changed) await emitPickupChanged(requestId);
 }

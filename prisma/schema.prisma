@@ -41,6 +41,8 @@ model Branch {
   schoolId   String
   name       String
   boardToken String      @unique
+  lat        Float?
+  lng        Float?
   school     School      @relation(fields: [schoolId], references: [id])
   gates      Gate[]
   classrooms Classroom[]

@@ -34,6 +34,8 @@ export default async function SetupPage() {
     branches: branches.map((b) => ({
       id: b.id,
       name: b.name,
+      lat: b.lat,
+      lng: b.lng,
       gates: b.gates.map((g) => ({ id: g.id, name: g.name })),
       classrooms: b.classrooms.map((c) => ({
         id: c.id,

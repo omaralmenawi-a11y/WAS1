@@ -28,6 +28,9 @@ const dateStr = z
     const d = new Date(`${s}T00:00:00Z`);
     return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
   }, 'التاريخ غير صالح');
+const coord = (lo: number, hi: number) => z.number({ message: 'الإحداثيات غير صالحة' }).min(lo, 'الإحداثيات غير صالحة').max(hi, 'الإحداثيات غير صالحة');
+const lat = coord(-90, 90);
+const lng = coord(-180, 180);
 const toDate = (s: string) => new Date(`${s}T00:00:00Z`);
 
 function resolveSchoolId(actor: User, schoolId?: string): string {
@@ -67,26 +70,27 @@ export async function updateSchoolSettings(actor: User, input: z.input<typeof se
 }
 
 // ---------- branches ----------
-export async function createBranch(actor: User, input: { schoolId?: string; name: string }) {
-  const i = parse(z.object({ schoolId: id.optional(), name }), input);
+export async function createBranch(actor: User, input: { schoolId?: string; name: string; lat?: number | null; lng?: number | null }) {
+  const i = parse(z.object({ schoolId: id.optional(), name, lat: lat.nullish(), lng: lng.nullish() }), input);
   requireManager(actor);
   const sid = resolveSchoolId(actor, i.schoolId);
   assertSchoolAccess(actor, sid);
   return prisma.$transaction(async (tx) => {
     if (!(await tx.school.findUnique({ where: { id: sid }, select: { id: true } }))) throw new NotFound();
-    const b = await tx.branch.create({ data: { schoolId: sid, name: i.name, boardToken: newBoardToken() } });
-    await writeAudit({ schoolId: sid, actorId: actor.id, action: 'BRANCH_CREATED', entity: 'Branch', entityId: b.id, data: { name: i.name } }, tx);
+    const b = await tx.branch.create({ data: { schoolId: sid, name: i.name, lat: i.lat ?? null, lng: i.lng ?? null, boardToken: newBoardToken() } });
+    await writeAudit({ schoolId: sid, actorId: actor.id, action: 'BRANCH_CREATED', entity: 'Branch', entityId: b.id, data: { name: i.name, lat: i.lat ?? null, lng: i.lng ?? null } }, tx);
     return b;
   });
 }
 
-export async function updateBranch(actor: User, input: { id: string; name: string }) {
-  const i = parse(z.object({ id, name }), input);
+/** lat/lng: undefined leaves the stored value, null clears it. */
+export async function updateBranch(actor: User, input: { id: string; name: string; lat?: number | null; lng?: number | null }) {
+  const i = parse(z.object({ id, name, lat: lat.nullish(), lng: lng.nullish() }), input);
   requireManager(actor);
   await assertBranchAccess(actor, i.id);
   return prisma.$transaction(async (tx) => {
-    const b = await tx.branch.update({ where: { id: i.id }, data: { name: i.name } });
-    await writeAudit({ schoolId: b.schoolId, actorId: actor.id, action: 'BRANCH_UPDATED', entity: 'Branch', entityId: b.id, data: { name: i.name } }, tx);
+    const b = await tx.branch.update({ where: { id: i.id }, data: { name: i.name, lat: i.lat, lng: i.lng } });
+    await writeAudit({ schoolId: b.schoolId, actorId: actor.id, action: 'BRANCH_UPDATED', entity: 'Branch', entityId: b.id, data: { name: i.name, lat: i.lat, lng: i.lng } }, tx);
     return b;
   });
 }

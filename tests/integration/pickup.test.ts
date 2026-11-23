@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { prisma } from '../../src/lib/db';
 import { createSchoolWithAdmin } from '../../src/lib/admin/schools';
-import { createClassroom, createGate, setClassSchedule } from '../../src/lib/school/setup';
+import { createClassroom, createGate, setClassSchedule, updateBranch } from '../../src/lib/school/setup';
 import { applyImport } from '../../src/lib/school/import';
-import { advanceItem, cancelRequest, changeGate, createRequest, deliverItems, verifyRecipient } from '../../src/lib/pickup/service';
+import { advanceItem, cancelRequest, changeGate, createRequest, deliverItems, markArrived, updateLocation, verifyRecipient } from '../../src/lib/pickup/service';
 import { pickupCode, qrPayload } from '../../src/lib/pickup/code';
 import { Conflict, NotFound, RateLimitError, ValidationError } from '../../src/lib/errors';
 import type { User } from '@prisma/client';
@@ -277,5 +277,98 @@ describe('verify rate limit and ambiguity', () => {
     // window passes -> allowed again
     const later = plus(T, 6);
     await expect(verifyRecipient(staff, { code: pickupCode(r.id, later) }, later)).resolves.toMatchObject({ requestId: r.id });
+  });
+});
+
+describe('updateLocation / markArrived', () => {
+  const P = { lat: 24.7743, lng: 46.7386, accuracy: 20 };
+  const BR = { lat: 24.7136, lng: 46.6753 };
+
+  async function withBranchCoords() {
+    const ctx = await setup();
+    await updateBranch(ctx.s.admin, { id: ctx.s.branch.id, name: ctx.s.branch.name, ...BR });
+    const r = await createRequest(ctx.g, [ctx.a.id], T);
+    return { ...ctx, r };
+  }
+
+  it('stores the point and returns ETA (distance / school speed)', async () => {
+    const { g, r } = await withBranchCoords();
+    const { etaSeconds } = await updateLocation(g, r.id, P, plus(T, 1));
+    expect(etaSeconds).toBeGreaterThan(1000);
+    expect(etaSeconds).toBeLessThan(1230); // ~9.2 km at 30 km/h
+    const row = await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } });
+    expect(row.lat).toBe(P.lat);
+    expect(row.etaSeconds).toBe(etaSeconds);
+    expect(await prisma.auditLog.count({ where: { entity: 'PickupRequest', entityId: r.id, action: { contains: 'LOCATION' } } })).toBe(0);
+  });
+
+  it('keeps only the last point', async () => {
+    const { g, r } = await withBranchCoords();
+    await updateLocation(g, r.id, P, plus(T, 1));
+    await updateLocation(g, r.id, { lat: 24.72, lng: 46.68, accuracy: 10 }, plus(T, 1.5));
+    const row = await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } });
+    expect(row.lat).toBe(24.72);
+    expect(row.lng).toBe(46.68);
+  });
+
+  it('ignores accuracy > 500 m and returns the previous ETA', async () => {
+    const { g, r } = await withBranchCoords();
+    const first = await updateLocation(g, r.id, P, plus(T, 1));
+    const res = await updateLocation(g, r.id, { lat: 25, lng: 47, accuracy: 800 }, plus(T, 2));
+    expect(res.etaSeconds).toBe(first.etaSeconds);
+    const row = await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } });
+    expect(row.lat).toBe(P.lat);
+  });
+
+  it('throttles updates closer than 10 s without writing', async () => {
+    const { g, r } = await withBranchCoords();
+    const first = await updateLocation(g, r.id, P, T);
+    const at = new Date(T.getTime() + 5000);
+    const res = await updateLocation(g, r.id, { lat: 24.72, lng: 46.68, accuracy: 10 }, at);
+    expect(res.etaSeconds).toBe(first.etaSeconds);
+    const row = await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } });
+    expect(row.lat).toBe(P.lat);
+    expect(row.locationAt).toEqual(T);
+    await updateLocation(g, r.id, { lat: 24.72, lng: 46.68, accuracy: 10 }, new Date(T.getTime() + 10_000));
+    expect((await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } })).lat).toBe(24.72);
+  });
+
+  it('ETA is null when the branch has no coordinates (point still stored)', async () => {
+    const { g, a } = await setup();
+    const r = await createRequest(g, [a.id], T);
+    expect((await updateLocation(g, r.id, P, plus(T, 1))).etaSeconds).toBeNull();
+    expect((await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } })).lat).toBe(P.lat);
+  });
+
+  it('validates input', async () => {
+    const { g, r } = await withBranchCoords();
+    for (const bad of [{ ...P, lat: 91 }, { ...P, lng: -181 }, { ...P, accuracy: -1 }, { ...P, lat: NaN }, { lat: 1, lng: 1 }])
+      await expect(updateLocation(g, r.id, bad as any, plus(T, 1))).rejects.toThrow(ValidationError);
+  });
+
+  it('other users get NotFound; closed or other-day requests are Conflict', async () => {
+    const { g, r, a } = await withBranchCoords();
+    const other = await guardian('+966507654321', 'آخر');
+    await expect(updateLocation(other, r.id, P, plus(T, 1))).rejects.toThrow(NotFound);
+    await expect(updateLocation(g, 'nope', P, plus(T, 1))).rejects.toThrow(NotFound);
+    await expect(updateLocation(g, r.id, P, plus(T, 24 * 60))).rejects.toThrow(Conflict);
+    await cancelRequest(g, r.id);
+    await expect(updateLocation(g, r.id, P, plus(T, 2))).rejects.toThrow(Conflict);
+    const row = await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } });
+    expect(row.lat).toBeNull();
+    void a;
+  });
+
+  it('markArrived is idempotent, audited once, only for the requester', async () => {
+    const { g, r, s } = await withBranchCoords();
+    const other = await guardian('+966507654321', 'آخر');
+    await expect(markArrived(other, r.id, plus(T, 1))).rejects.toThrow(NotFound);
+    await markArrived(g, r.id, plus(T, 1));
+    await markArrived(g, r.id, plus(T, 3));
+    const row = await prisma.pickupRequest.findUniqueOrThrow({ where: { id: r.id } });
+    expect(row.arrivedAt).toEqual(plus(T, 1));
+    expect(await prisma.auditLog.count({ where: { action: 'PICKUP_ARRIVED', entityId: r.id, schoolId: s.school.id } })).toBe(1);
+    await cancelRequest(g, r.id);
+    await expect(markArrived(g, r.id, plus(T, 4))).rejects.toThrow(Conflict);
   });
 });

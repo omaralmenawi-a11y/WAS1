@@ -6,7 +6,7 @@ import {
 
 type Gate = { id: string; name: string };
 type Classroom = { id: string; name: string; grade: string; schedules: Record<number, string> };
-type Branch = { id: string; name: string; gates: Gate[]; classrooms: Classroom[] };
+type Branch = { id: string; name: string; lat: number | null; lng: number | null; gates: Gate[]; classrooms: Classroom[] };
 type Data = {
   settings: { weekDays: number[]; pickupLeadMin: number; pickupTailMin: number; etaSpeedKmh: number };
   branches: Branch[];
@@ -45,6 +45,10 @@ function BranchesTab({ data }: { data: Data }) {
   const { call, error, busy } = useApi();
   const [branchName, setBranchName] = useState('');
   const [gateNames, setGateNames] = useState<Record<string, string>>({});
+  const [newCoords, setNewCoords] = useState({ lat: '', lng: '' });
+  const [coords, setCoords] = useState<Record<string, { lat: string; lng: string }>>({});
+  const num = (v: string) => (v.trim() === '' ? null : Number(v));
+  const coordOf = (b: Branch) => coords[b.id] ?? { lat: b.lat?.toString() ?? '', lng: b.lng?.toString() ?? '' };
   return (
     <div className="space-y-4">
       <Err text={error} />
@@ -63,6 +67,19 @@ function BranchesTab({ data }: { data: Data }) {
             {b.gates.length === 0 && <li className="py-2 text-sm text-navy/60">لا توجد بوابات.</li>}
           </ul>
           <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const c = coordOf(b);
+              await call('PATCH', `/api/school/branches/${b.id}`, { name: b.name, lat: num(c.lat), lng: num(c.lng) });
+            }}
+          >
+            <span className="text-sm text-navy/70">موقع الفرع (لحساب وقت الوصول)</span>
+            <input className={`${inputCls} w-32`} dir="ltr" type="number" step="any" min={-90} max={90} placeholder="خط العرض" value={coordOf(b).lat} onChange={(e) => setCoords({ ...coords, [b.id]: { ...coordOf(b), lat: e.target.value } })} />
+            <input className={`${inputCls} w-32`} dir="ltr" type="number" step="any" min={-180} max={180} placeholder="خط الطول" value={coordOf(b).lng} onChange={(e) => setCoords({ ...coords, [b.id]: { ...coordOf(b), lng: e.target.value } })} />
+            <button disabled={busy} className={tealBtn}>حفظ الموقع</button>
+          </form>
+          <form
             className="flex gap-2"
             onSubmit={async (e) => {
               e.preventDefault();
@@ -75,13 +92,18 @@ function BranchesTab({ data }: { data: Data }) {
         </section>
       ))}
       <form
-        className={`${cardCls} flex gap-2`}
+        className={`${cardCls} flex flex-wrap gap-2`}
         onSubmit={async (e) => {
           e.preventDefault();
-          if (await call('POST', '/api/school/branches', { name: branchName })) setBranchName('');
+          if (await call('POST', '/api/school/branches', { name: branchName, lat: num(newCoords.lat), lng: num(newCoords.lng) })) {
+            setBranchName('');
+            setNewCoords({ lat: '', lng: '' });
+          }
         }}
       >
         <input className={`${inputCls} flex-1`} placeholder="اسم فرع جديد" required value={branchName} onChange={(e) => setBranchName(e.target.value)} />
+        <input className={`${inputCls} w-32`} dir="ltr" type="number" step="any" min={-90} max={90} placeholder="خط العرض" value={newCoords.lat} onChange={(e) => setNewCoords({ ...newCoords, lat: e.target.value })} />
+        <input className={`${inputCls} w-32`} dir="ltr" type="number" step="any" min={-180} max={180} placeholder="خط الطول" value={newCoords.lng} onChange={(e) => setNewCoords({ ...newCoords, lng: e.target.value })} />
         <button disabled={busy} className={primaryBtn}>إضافة فرع</button>
       </form>
     </div>
