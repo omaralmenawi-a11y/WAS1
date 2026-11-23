@@ -7,12 +7,13 @@ export const GET = (req: Request) =>
   handle(async () => {
     const actor = await requireUser(req);
     const q = new URL(req.url).searchParams;
-    const rows = await listStudents(actor, {
+    const result = await listStudents(actor, {
       search: q.get('search') ?? undefined,
       branchId: q.get('branchId') ?? undefined,
       classroomId: q.get('classroomId') ?? undefined,
+      page: Number(q.get('page')) || 1,
     });
-    return Response.json(rows);
+    return Response.json(result);
   });
 
 export const POST = mutation(

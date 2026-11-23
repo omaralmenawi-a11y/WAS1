@@ -3,7 +3,9 @@ import { prisma } from '../../src/lib/db';
 import { createPlatformAdmin, createSchoolWithAdmin } from '../../src/lib/admin/schools';
 import { createClassroom, createGate, setClassSchedule } from '../../src/lib/school/setup';
 import { applyImport, type ImportRow } from '../../src/lib/school/import';
-import { createStudent, listStudents, setStudentActive, updateStudent } from '../../src/lib/school/students';
+import { createStudent, listStudents, setStudentActive, STUDENT_PAGE_SIZE, updateStudent } from '../../src/lib/school/students';
+import { GET as getStudents } from '../../src/app/api/school/students/route';
+import { createSession } from '../../src/lib/auth/session';
 import { listChildrenForUser } from '../../src/lib/guardian/children';
 import { requestPhoneLinkOtp, linkPhone } from '../../src/lib/guardian/phone';
 import { Conflict, Forbidden, NotFound, ValidationError } from '../../src/lib/errors';
@@ -140,10 +142,45 @@ describe('student CRUD', () => {
     expect((await prisma.guardianPhone.findMany({ where: { studentId: s.id } })).map((p) => p.phone)).toEqual(['+966501234568']);
     await expect(updateStudent(b.admin, { id: s.id, fullName: 'x' })).rejects.toThrow(NotFound);
     await expect(setStudentActive(b.admin, { id: s.id, active: false })).rejects.toThrow(NotFound);
-    expect(await listStudents(a.admin, { search: 'سعد' })).toHaveLength(1);
-    expect(await listStudents(a.admin, { search: 'غير' })).toHaveLength(0);
-    expect(await listStudents(b.admin, {})).toHaveLength(0);
+    expect((await listStudents(a.admin, { search: 'سعد' })).rows).toHaveLength(1);
+    expect((await listStudents(a.admin, { search: 'غير' })).rows).toHaveLength(0);
+    expect((await listStudents(b.admin, {})).total).toBe(0);
     expect(await prisma.auditLog.count({ where: { action: 'STUDENT_UPDATED' } })).toBe(1);
+  });
+});
+
+describe('listStudents: server-side search and pagination', () => {
+  it('pages of 50 with total; searches name, student number and guardian phone', async () => {
+    const s = await mkSchool('a');
+    const rows = Array.from({ length: 120 }, (_, i) =>
+      row({ branch: s.branch.name, externalId: `S${String(i).padStart(3, '0')}`, fullName: `طالب ${String(i).padStart(3, '0')}`, phones: [`05000${String(i).padStart(5, '0')}`] }),
+    );
+    rows[7].fullName = 'ريم المميزة';
+    expect((await applyImport(s.admin, s.school.id, rows)).errors).toEqual([]);
+    expect(STUDENT_PAGE_SIZE).toBe(50);
+
+    const p1 = await listStudents(s.admin, {});
+    expect(p1).toMatchObject({ total: 120, page: 1, pageSize: 50 });
+    expect(p1.rows).toHaveLength(50);
+    const p3 = await listStudents(s.admin, { page: 3 });
+    expect(p3.rows).toHaveLength(20);
+    expect(new Set([...p1.rows, ...p3.rows].map((x) => x.id)).size).toBe(70);
+    expect((await listStudents(s.admin, { page: 99 })).rows).toHaveLength(0);
+
+    expect((await listStudents(s.admin, { search: 'المميزة' })).rows.map((x) => x.externalId)).toEqual(['S007']);
+    expect((await listStudents(s.admin, { search: 's119' })).rows.map((x) => x.externalId)).toEqual(['S119']);
+    expect((await listStudents(s.admin, { search: '0500000042' })).rows.map((x) => x.externalId)).toEqual(['S042']);
+    expect((await listStudents(s.admin, { search: '00042' })).rows.map((x) => x.externalId)).toEqual(['S042']);
+
+    const res = await getStudents(
+      new Request('http://x/api/school/students?search=%D8%B7%D8%A7%D9%84%D8%A8&page=2', {
+        headers: { cookie: `wasl_session=${await createSession(s.admin.id, s.admin.role)}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ total: 119, page: 2, pageSize: 50 });
+    expect(body.rows).toHaveLength(50);
   });
 });
 

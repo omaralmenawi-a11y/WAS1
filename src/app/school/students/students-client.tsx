@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Err, cardCls, dangerBtn, inputCls, primaryBtn, tealBtn, useApi } from '@/components/school-ui';
 
 type Branch = { id: string; name: string; gates: { id: string; name: string }[]; classrooms: { id: string; name: string }[] };
@@ -13,12 +13,17 @@ type Summary = { created: number; updated: number; errors: Msg[]; warnings: Msg[
 
 const empty = (b?: Branch) => ({ id: '', externalId: '', fullName: '', branchId: b?.id ?? '', classroomId: b?.classrooms[0]?.id ?? '', gateId: b?.gates[0]?.id ?? '', phones: '' });
 
-export function StudentsClient({ branches, students }: { branches: Branch[]; students: Student[] }) {
+type Filter = { search: string; branchId: string; classroomId: string };
+type Paging = { page: number; pageSize: number; total: number };
+
+/** Search, filters and paging run on the server: they live in the URL and the page re-renders one page of 50. */
+export function StudentsClient({ branches, students, filter, paging }: { branches: Branch[]; students: Student[]; filter: Filter; paging: Paging }) {
   const { call, error, busy } = useApi();
   const router = useRouter();
-  const [search, setSearch] = useState('');
-  const [fBranch, setFBranch] = useState('');
-  const [fClass, setFClass] = useState('');
+  const [search, setSearch] = useState(filter.search);
+  const fBranch = filter.branchId;
+  const fClass = filter.classroomId;
+  const pages = Math.max(1, Math.ceil(paging.total / paging.pageSize));
   const [f, setF] = useState(empty(branches[0]));
   const [summary, setSummary] = useState<Summary | null>(null);
   const [upErr, setUpErr] = useState('');
@@ -26,15 +31,25 @@ export function StudentsClient({ branches, students }: { branches: Branch[]; stu
 
   const branch = branches.find((b) => b.id === f.branchId);
   const filterClasses = branches.find((b) => b.id === fBranch)?.classrooms ?? branches.flatMap((b) => b.classrooms);
-  const shown = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return students.filter(
-      (s) =>
-        (!fBranch || s.branchId === fBranch) &&
-        (!fClass || s.classroomId === fClass) &&
-        (!q || s.fullName.toLowerCase().includes(q) || s.externalId.toLowerCase().includes(q)),
-    );
-  }, [students, search, fBranch, fClass]);
+  const shown = students;
+
+  function go(next: Partial<Filter> & { page?: number }) {
+    const f = { ...filter, search: search.trim(), ...next };
+    const qs = new URLSearchParams();
+    if (f.search) qs.set('search', f.search);
+    if (f.branchId) qs.set('branchId', f.branchId);
+    if (f.classroomId) qs.set('classroomId', f.classroomId);
+    if (next.page && next.page > 1) qs.set('page', String(next.page));
+    const s = qs.toString();
+    router.replace(s ? `?${s}` : '?', { scroll: false });
+  }
+  const goRef = useRef(go);
+  goRef.current = go;
+  useEffect(() => {
+    if (search.trim() === filter.search) return;
+    const t = setTimeout(() => goRef.current({ search: search.trim() }), 300);
+    return () => clearTimeout(t);
+  }, [search, filter.search]);
 
   const setBranch = (id: string) => {
     const b = branches.find((x) => x.id === id);
@@ -136,12 +151,12 @@ export function StudentsClient({ branches, students }: { branches: Branch[]; stu
 
       <section className={cardCls}>
         <div className="flex flex-wrap gap-3">
-          <input className={`${inputCls} grow`} placeholder="بحث بالاسم أو رقم الطالب" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <select className={inputCls} value={fBranch} onChange={(e) => { setFBranch(e.target.value); setFClass(''); }} aria-label="تصفية بالفرع">
+          <input className={`${inputCls} grow`} placeholder="بحث بالاسم أو رقم الطالب أو جوال ولي الأمر" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <select className={inputCls} value={fBranch} onChange={(e) => go({ branchId: e.target.value, classroomId: '' })} aria-label="تصفية بالفرع">
             <option value="">كل الفروع</option>
             {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
-          <select className={inputCls} value={fClass} onChange={(e) => setFClass(e.target.value)} aria-label="تصفية بالفصل">
+          <select className={inputCls} value={fClass} onChange={(e) => go({ classroomId: e.target.value })} aria-label="تصفية بالفصل">
             <option value="">كل الفصول</option>
             {filterClasses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
@@ -174,6 +189,13 @@ export function StudentsClient({ branches, students }: { branches: Branch[]; stu
             </tbody>
           </table>
         </div>
+        <nav className="flex flex-wrap items-center justify-between gap-3 text-sm text-navy/70" aria-label="صفحات الطلاب">
+          <span>عدد الطلاب: {paging.total} — صفحة {paging.page} من {pages}</span>
+          <span className="flex gap-2">
+            <button type="button" className={tealBtn} disabled={paging.page <= 1} onClick={() => go({ page: paging.page - 1 })}>السابق</button>
+            <button type="button" className={tealBtn} disabled={paging.page >= pages} onClick={() => go({ page: paging.page + 1 })}>التالي</button>
+          </span>
+        </nav>
       </section>
     </div>
   );

@@ -5,16 +5,26 @@ import { StudentsClient } from './students-client';
 
 export const dynamic = 'force-dynamic';
 
-export default async function StudentsPage() {
+type Search = { search?: string; branchId?: string; classroomId?: string; page?: string };
+
+export default async function StudentsPage({ searchParams }: { searchParams: Promise<Search> }) {
   const user = await requirePageUser(['SCHOOL_ADMIN']);
   const schoolId = user.schoolId!;
-  const [branches, students] = await Promise.all([
+  const sp = await searchParams;
+  const filter = { search: sp.search ?? '', branchId: sp.branchId ?? '', classroomId: sp.classroomId ?? '' };
+  const [branches, list] = await Promise.all([
     prisma.branch.findMany({
       where: { schoolId },
       orderBy: { name: 'asc' },
       include: { gates: { orderBy: { name: 'asc' } }, classrooms: { orderBy: { name: 'asc' } } },
     }),
-    listStudents(user, { schoolId }),
+    listStudents(user, {
+      schoolId,
+      search: filter.search || undefined,
+      branchId: filter.branchId || undefined,
+      classroomId: filter.classroomId || undefined,
+      page: Number(sp.page) || 1,
+    }),
   ]);
   return (
     <main className="mx-auto max-w-5xl space-y-6 px-4 py-8">
@@ -26,7 +36,9 @@ export default async function StudentsPage() {
           gates: b.gates.map((g) => ({ id: g.id, name: g.name })),
           classrooms: b.classrooms.map((c) => ({ id: c.id, name: c.name })),
         }))}
-        students={students.map((s) => ({
+        filter={filter}
+        paging={{ page: list.page, pageSize: list.pageSize, total: list.total }}
+        students={list.rows.map((s) => ({
           id: s.id,
           externalId: s.externalId ?? '',
           fullName: s.fullName,

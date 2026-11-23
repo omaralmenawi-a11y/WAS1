@@ -140,24 +140,43 @@ export async function setStudentActive(actor: User, input: { id: string; active:
   return out;
 }
 
+export const STUDENT_PAGE_SIZE = 50;
+
+/** One page (50) of a school's students, searched server-side by name, student number or guardian phone. */
 export async function listStudents(
   actor: User,
-  filter: { schoolId?: string; search?: string; branchId?: string; classroomId?: string; includeInactive?: boolean } = {},
+  filter: { schoolId?: string; search?: string; branchId?: string; classroomId?: string; page?: number } = {},
 ) {
   requireManager(actor);
   const schoolId = filter.schoolId ?? actor.schoolId;
   if (!schoolId) throw new ValidationError('المدرسة مطلوبة');
   assertSchoolAccess(actor, schoolId);
   const q = filter.search?.trim();
-  return prisma.student.findMany({
-    where: {
-      schoolId,
-      ...(filter.branchId ? { branchId: filter.branchId } : {}),
-      ...(filter.classroomId ? { classroomId: filter.classroomId } : {}),
-      ...(q ? { OR: [{ fullName: { contains: q, mode: 'insensitive' as const } }, { externalId: { contains: q, mode: 'insensitive' as const } }] } : {}),
-    },
-    include: { phones: { orderBy: { phone: 'asc' } }, branch: { select: { name: true } }, classroom: { select: { name: true } } },
-    orderBy: [{ fullName: 'asc' }, { id: 'asc' }],
-    take: 1000,
-  });
+  const phone = q ? normalizePhone(q) : null;
+  const where: Prisma.StudentWhereInput = {
+    schoolId,
+    ...(filter.branchId ? { branchId: filter.branchId } : {}),
+    ...(filter.classroomId ? { classroomId: filter.classroomId } : {}),
+    ...(q
+      ? {
+          OR: [
+            { fullName: { contains: q, mode: 'insensitive' as const } },
+            { externalId: { contains: q, mode: 'insensitive' as const } },
+            { phones: { some: { phone: phone ?? { contains: q } } } },
+          ],
+        }
+      : {}),
+  };
+  const page = Math.max(1, Math.floor(Number(filter.page)) || 1);
+  const [total, rows] = await Promise.all([
+    prisma.student.count({ where }),
+    prisma.student.findMany({
+      where,
+      include: { phones: { orderBy: { phone: 'asc' } }, branch: { select: { name: true } }, classroom: { select: { name: true } } },
+      orderBy: [{ fullName: 'asc' }, { id: 'asc' }],
+      skip: (page - 1) * STUDENT_PAGE_SIZE,
+      take: STUDENT_PAGE_SIZE,
+    }),
+  ]);
+  return { rows, total, page, pageSize: STUDENT_PAGE_SIZE };
 }
