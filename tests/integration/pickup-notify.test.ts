@@ -186,6 +186,15 @@ describe('pickup status notifications', () => {
     expect(await rows(other.id)).toHaveLength(0);
   });
 
+  it('guardian cancelling their own request is not notified; the other guardian is', async () => {
+    const { req, g1, g2 } = await setup();
+    await cancelRequest(g1, req.id, undefined, plus(T, 1));
+    expect(await rows(g1.id, 'CANCELLED')).toHaveLength(0);
+    const r = await rows(g2.id, 'CANCELLED');
+    expect(r).toHaveLength(1);
+    expect(r[0].url).toBe('/parent');
+  });
+
   it('stale auto-close sends nothing', async () => {
     const { g1, g2 } = await setup();
     await closeStaleRequests(new Date(T.getTime() + 24 * 3600_000));

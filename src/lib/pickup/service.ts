@@ -97,10 +97,13 @@ async function notifyProgress(requestId: string, itemId: string, kind: 'PREPARIN
   await notify([ctx.requesterId], { kind, ...m, url: statusUrl(requestId), tag: `${kind}:${itemId}` }, { dedupeKey: (u) => `${kind}:${itemId}:${u}` });
 }
 
-/** The requester gets the request's status page; every other guardian gets /parent (they cannot open someone else's request). */
-async function notifyParties(requestId: string, requesterId: string, others: string[], p: Omit<NotificationPayload, 'url'>): Promise<void> {
-  await notify([requesterId], { ...p, url: statusUrl(requestId) });
-  const rest = others.filter((id) => id !== requesterId);
+/**
+ * The requester gets the request's status page; every other guardian gets /parent (they cannot open someone
+ * else's request). actorId (who caused the event) is not notified.
+ */
+async function notifyParties(requestId: string, requesterId: string, others: string[], p: Omit<NotificationPayload, 'url'>, actorId?: string): Promise<void> {
+  if (requesterId !== actorId) await notify([requesterId], { ...p, url: statusUrl(requestId) });
+  const rest = others.filter((id) => id !== requesterId && id !== actorId);
   if (rest.length) await notify(rest, { ...p, url: '/parent' });
 }
 
@@ -113,13 +116,13 @@ async function notifyDelivered(requestId: string, itemIds: string[], at: Date): 
   await notifyParties(requestId, ctx.requesterId, others, { kind: 'DELIVERED', ...m, tag: `DELIVERED:${requestId}` });
 }
 
-/** Names only the items cancelled by this action (N5), and this action's reason. */
-async function notifyCancelled(requestId: string, itemIds: string[], reason: string | null): Promise<void> {
+/** Names only the items cancelled by this action (N5), and this action's reason. The actor is not notified. */
+async function notifyCancelled(requestId: string, itemIds: string[], reason: string | null, actorId: string): Promise<void> {
   const ctx = await loadNotifyCtx(requestId);
   if (!ctx) return;
   const cancelled = ctx.items.filter((i) => itemIds.includes(i.id));
   const others = await linkedGuardianIds(cancelled.map((i) => i.studentId));
-  await notifyParties(requestId, ctx.requesterId, others, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason }), tag: `CANCELLED:${requestId}` });
+  await notifyParties(requestId, ctx.requesterId, others, { kind: 'CANCELLED', ...msgCancelled({ number: ctx.number, reason }), tag: `CANCELLED:${requestId}` }, actorId);
 }
 
 export const REVOKED_REASON = 'أُلغي من المدرسة: تغيّرت صلاحية الاستلام';
@@ -511,7 +514,7 @@ export async function cancelRequest(actor: User, requestId: string, reasonAr?: s
     );
   });
   await emitPickupChanged(requestId);
-  safely(() => notifyCancelled(requestId, cancelledIds, reason));
+  safely(() => notifyCancelled(requestId, cancelledIds, reason, actor.id));
 }
 
 const MAX_ACCURACY_M = 500;
