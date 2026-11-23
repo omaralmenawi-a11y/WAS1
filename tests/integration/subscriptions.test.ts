@@ -35,6 +35,12 @@ describe('subscriptions', () => {
     expect(await prisma.pushSubscription.count()).toBe(0);
   });
 
+  it('oversized keys -> ValidationError', async () => {
+    const u = await mk('a');
+    await expect(subscribe(u, { endpoint: 'https://push.example/1', keys: { p256dh: 'x'.repeat(257), auth: 'a' } })).rejects.toBeInstanceOf(ValidationError);
+    await expect(subscribe(u, { endpoint: 'https://push.example/1', keys: { p256dh: 'p', auth: 'a'.repeat(257) } })).rejects.toBeInstanceOf(ValidationError);
+  });
+
   it("unsubscribe of another user's endpoint does nothing; own is idempotent", async () => {
     const a = await mk('a');
     const b = await mk('b');

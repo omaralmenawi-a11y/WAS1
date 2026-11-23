@@ -12,7 +12,7 @@ export async function subscribe(user: Pick<User, 'id'>, input: SubscriptionInput
   if (typeof endpoint !== 'string' || !/^https:\/\/\S+$/.test(endpoint) || endpoint.length > 2048) {
     throw new ValidationError('عنوان الإشعارات غير صالح');
   }
-  if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string' || !keys.p256dh || !keys.auth) {
+  if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string' || !keys.p256dh || !keys.auth || keys.p256dh.length > 256 || keys.auth.length > 256) {
     throw new ValidationError('مفاتيح الإشعارات غير صالحة');
   }
   const ua = typeof userAgent === 'string' ? userAgent.slice(0, 300) : null;

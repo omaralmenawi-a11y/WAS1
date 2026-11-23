@@ -1,6 +1,8 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { NOTIFICATIONS_READ_EVENT } from './notification-events';
 import { useLive, useOnReconnect } from './live';
 
 export function NotificationBell() {
@@ -11,9 +13,21 @@ export function NotificationBell() {
       .then((d) => d && setUnread(d.unread))
       .catch(() => {});
   }, []);
-  useEffect(refresh, [refresh]);
+  const pathname = usePathname();
+  const seen = useRef(new Set<string>());
+  useEffect(refresh, [refresh, pathname]);
+  useEffect(() => {
+    window.addEventListener(NOTIFICATIONS_READ_EVENT, refresh);
+    return () => window.removeEventListener(NOTIFICATIONS_READ_EVENT, refresh);
+  }, [refresh]);
   useOnReconnect(refresh);
-  useLive('notification:new', () => setUnread((n) => n + 1));
+  useLive<{ id: string }>('notification:new', (n) => {
+    if (n?.id) {
+      if (seen.current.has(n.id)) return;
+      seen.current.add(n.id);
+    }
+    setUnread((c) => c + 1);
+  });
   return (
     <Link href="/parent/notifications" aria-label={unread ? `الإشعارات، ${unread} غير مقروء` : 'الإشعارات'} className="relative inline-flex h-8 w-8 items-center justify-center">
       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

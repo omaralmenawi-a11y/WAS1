@@ -25,14 +25,18 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = new URL((event.notification.data && event.notification.data.url) || '/parent', self.location.origin).href;
+  let u;
+  try {
+    u = new URL((event.notification.data && event.notification.data.url) || '/parent', self.location.origin);
+  } catch (e) {
+    u = null;
+  }
+  if (!u || u.origin !== self.location.origin) u = new URL('/parent', self.location.origin);
+  const url = u.href;
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const c of list) {
         if (c.url === url && 'focus' in c) return c.focus();
-      }
-      for (const c of list) {
-        if ('navigate' in c && 'focus' in c) return c.navigate(url).then((w) => (w || c).focus());
       }
       return self.clients.openWindow(url);
     }),

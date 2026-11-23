@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { useLive } from './live';
+import { announceNotificationsRead } from './notification-events';
 
 type Item = { id: string; title: string; body: string; url: string; createdAt: string; readAt: string | null };
 
@@ -16,7 +17,10 @@ export function NotificationList({ initial }: { initial: Item[] }) {
 
   async function markAll() {
     const res = await fetch('/api/notifications/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: 'all' }) });
-    if (res.ok) setItems((cur) => cur.map((i) => ({ ...i, readAt: i.readAt ?? new Date().toISOString() })));
+    if (res.ok) {
+      setItems((cur) => cur.map((i) => ({ ...i, readAt: i.readAt ?? new Date().toISOString() })));
+      announceNotificationsRead();
+    }
   }
   async function loadMore() {
     const last = items[items.length - 1];
@@ -28,7 +32,9 @@ export function NotificationList({ initial }: { initial: Item[] }) {
   }
   async function open(i: Item) {
     if (!i.readAt) {
-      fetch('/api/notifications/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [i.id] }) }).catch(() => {});
+      fetch('/api/notifications/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [i.id] }) })
+        .then(() => announceNotificationsRead())
+        .catch(() => {});
       setItems((cur) => cur.map((x) => (x.id === i.id ? { ...x, readAt: new Date().toISOString() } : x)));
     }
   }
@@ -47,7 +53,7 @@ export function NotificationList({ initial }: { initial: Item[] }) {
         {items.map((i) => (
           <li key={i.id}>
             <Link
-              href={i.url}
+              href={i.url.startsWith('/') && !i.url.startsWith('//') ? i.url : '/parent'}
               onClick={() => open(i)}
               className={`block rounded-xl bg-white p-4 shadow-sm ring-1 ring-navy/10 ${i.readAt ? '' : 'border-s-4 border-teal'}`}
             >

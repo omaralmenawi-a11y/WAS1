@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { requirePageUser } from '@/lib/auth/guard';
 import { IosInstallHint, LogoutButton } from '@/components/parent-ui';
+import { PushSync } from '@/components/PushSync';
 import { PushToggle } from '@/components/PushToggle';
 import { NotificationBell } from '@/components/NotificationBell';
 
@@ -23,6 +24,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
       </header>
       <main className="flex-1 space-y-3 p-4">
         <IosInstallHint />
+        <PushSync />
         <PushToggle />
         {children}
       </main>

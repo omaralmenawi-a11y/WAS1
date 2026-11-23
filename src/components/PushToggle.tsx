@@ -11,6 +11,17 @@ function keyToBytes(b64: string): Uint8Array {
   return Uint8Array.from(raw, (c) => c.charCodeAt(0));
 }
 
+/** Re-assert ownership: the upsert moves a subscription left by a previous user of this device. */
+export async function syncSubscription(sub: PushSubscription): Promise<void> {
+  try {
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: sub.endpoint, keys: sub.toJSON().keys }),
+    });
+  } catch {}
+}
+
 async function currentSub(): Promise<PushSubscription | null> {
   const reg = await navigator.serviceWorker.getRegistration();
   return (await reg?.pushManager.getSubscription()) ?? null;
@@ -33,6 +44,7 @@ export function PushToggle() {
         if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return alive && setState('hidden');
         if (Notification.permission === 'denied') return alive && setState('denied');
         const sub = Notification.permission === 'granted' ? await currentSub() : null;
+        if (sub) await syncSubscription(sub);
         if (alive) setState(sub ? 'on' : 'off');
       } catch {
         if (alive) setState('hidden');
