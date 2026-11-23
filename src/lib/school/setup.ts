@@ -289,3 +289,16 @@ export async function deleteOverride(actor: User, input: { id: string }) {
   });
 }
 
+
+// ---------- board token ----------
+/** Issues a new public-board token; the old link stops working immediately. */
+export async function regenerateBoardToken(actor: User, branchId: string) {
+  const bid = parse(id, branchId);
+  requireManager(actor);
+  await assertBranchAccess(actor, bid);
+  return prisma.$transaction(async (tx) => {
+    const b = await tx.branch.update({ where: { id: bid }, data: { boardToken: newBoardToken() }, select: { id: true, schoolId: true, boardToken: true } });
+    await writeAudit({ schoolId: b.schoolId, actorId: actor.id, action: 'BOARD_TOKEN_REGENERATED', entity: 'Branch', entityId: b.id, data: { branchId: b.id } }, tx);
+    return { id: b.id, boardToken: b.boardToken };
+  });
+}

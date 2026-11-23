@@ -1,4 +1,23 @@
 // Pure helpers for the staff page. No React or Next imports.
+import type { StaffRequestView } from './views';
+
+function rank(v: StaffRequestView): number {
+  if (v.items.some((i) => i.status === 'READY')) return 0;
+  if (v.items.some((i) => i.status === 'PREPARING')) return 1;
+  return 2;
+}
+
+/** Most actionable first: READY, then PREPARING, then by ETA, then number. */
+export function sortStaffViews(list: StaffRequestView[]): StaffRequestView[] {
+  const eta = (v: StaffRequestView) => v.etaSeconds ?? Number.POSITIVE_INFINITY;
+  return [...list].sort((a, b) => rank(a) - rank(b) || (rank(a) === 2 ? eta(a) - eta(b) || 0 : 0) || a.number - b.number);
+}
+
+/** Highest item state of a request, for chips and counts. */
+export function topStatus(v: StaffRequestView): 'READY' | 'PREPARING' | 'EN_ROUTE' {
+  const r = rank(v);
+  return r === 0 ? 'READY' : r === 1 ? 'PREPARING' : 'EN_ROUTE';
+}
 
 /** Keep still-READY picks and add children that became READY since `prevReady`. */
 export function syncPicked(picked: string[], prevReady: string[], ready: string[]): string[] {

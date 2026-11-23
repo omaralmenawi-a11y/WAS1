@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useLive, useOnReconnect } from '@/components/live';
 import { StatusChip } from '@/components/StatusChip';
 import type { StaffRequestView } from '@/lib/pickup/views';
-import { deliverable, inStaffGates, syncPicked } from '@/lib/pickup/staff-client';
+import { deliverable, sortStaffViews, inStaffGates, syncPicked } from '@/lib/pickup/staff-client';
 
 const QrScanner = dynamic(() => import('@/components/QrScanner').then((m) => m.QrScanner), { ssr: false });
 
@@ -18,14 +18,6 @@ const btn = 'min-h-[44px] rounded-lg px-4 text-sm font-medium disabled:opacity-5
 const primary = `${btn} bg-navy text-white`;
 const secondary = `${btn} border border-navy/20 bg-white text-navy`;
 const ok = `${btn} bg-teal text-white`;
-
-function rank(v: StaffRequestView) {
-  return v.items.some((i) => i.status === 'READY') ? 0 : v.items.some((i) => i.status === 'PREPARING') ? 1 : 2;
-}
-function sortViews(list: StaffRequestView[]) {
-  const eta = (v: StaffRequestView) => v.etaSeconds ?? Infinity;
-  return [...list].sort((a, b) => rank(a) - rank(b) || (rank(a) === 2 ? eta(a) - eta(b) || 0 : 0) || a.number - b.number);
-}
 
 function etaText(r: StaffRequestView): string | null {
   if (r.arrivedAt || r.etaSeconds === 0) return 'وصل';
@@ -69,7 +61,7 @@ export function StaffClient({ gateIds }: { gateIds: string[] }) {
       if (!v.open || !inStaffGates(v, gateIds)) return rest;
       const term = qRef.current.trim();
       const matches = !term || String(v.number) === term || v.items.some((i) => i.studentName.toLowerCase().includes(term.toLowerCase()));
-      return sortViews(matches ? [...rest, v] : rest);
+      return sortStaffViews(matches ? [...rest, v] : rest);
     });
     setVerified((cur) => (cur && cur.requestId === v.id && !v.open ? null : cur));
   });

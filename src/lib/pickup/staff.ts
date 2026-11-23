@@ -3,13 +3,8 @@ import { prisma } from '../db';
 import { assertBranchAccess } from '../authz';
 import { Forbidden, NotFound, ValidationError } from '../errors';
 import { now, riyadhDay } from '../time';
+import { sortStaffViews } from './staff-client';
 import { loadRequestForViews, toStaffView, type StaffRequestView } from './views';
-
-function rank(v: StaffRequestView): number {
-  if (v.items.some((i) => i.status === 'READY')) return 0;
-  if (v.items.some((i) => i.status === 'PREPARING')) return 1;
-  return 2;
-}
 
 /** Open requests of today for the staff's branch (and gates, when assigned), most actionable first. */
 export async function listStaffRequests(
@@ -46,6 +41,5 @@ export async function listStaffRequests(
   const rows = await prisma.pickupRequest.findMany({ where, select: { id: true } });
   const loaded = await Promise.all(rows.map((r) => loadRequestForViews(r.id)));
   const views = loaded.filter((r): r is NonNullable<typeof r> => !!r).map(toStaffView);
-  const eta = (v: StaffRequestView) => v.etaSeconds ?? Number.POSITIVE_INFINITY;
-  return views.sort((a, b) => rank(a) - rank(b) || (rank(a) === 2 ? eta(a) - eta(b) || 0 : 0) || a.number - b.number);
+  return sortStaffViews(views);
 }

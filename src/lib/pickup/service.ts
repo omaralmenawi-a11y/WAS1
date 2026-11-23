@@ -87,7 +87,7 @@ export async function createRequest(user: User, studentIds: string[], at: Date =
       const request = await prisma.$transaction(async (tx) => {
         const stale = await tx.pickupRequest.findMany({
           where: { open: true, day: { lt: day }, items: { some: { studentId: { in: ids }, status: { in: ACTIVE } } } },
-          select: { id: true, schoolId: true },
+          select: { id: true, schoolId: true, branchId: true },
           orderBy: { id: 'asc' },
         });
         for (const st of stale) {
@@ -97,7 +97,7 @@ export async function createRequest(user: User, studentIds: string[], at: Date =
             data: { status: 'CANCELLED', cancelledAt: at, cancelReason: 'انتهى اليوم الدراسي' },
           });
           await closeIfDone(tx, st.id, at);
-          await writeAudit({ schoolId: st.schoolId, actorId: user.id, action: 'PICKUP_AUTO_CLOSED', entity: 'PickupRequest', entityId: st.id, data: {} }, tx);
+          await writeAudit({ schoolId: st.schoolId, actorId: user.id, action: 'PICKUP_AUTO_CLOSED', entity: 'PickupRequest', entityId: st.id, data: { branchId: st.branchId } }, tx);
         }
         const busy = await tx.pickupItem.findFirst({
           where: { studentId: { in: ids }, status: { in: ACTIVE } },
@@ -122,7 +122,7 @@ export async function createRequest(user: User, studentIds: string[], at: Date =
           include: { items: true },
         });
         await writeAudit(
-          { schoolId: created.schoolId, actorId: user.id, action: 'PICKUP_CREATED', entity: 'PickupRequest', entityId: created.id, data: { number: created.number, studentIds: ids } },
+          { schoolId: created.schoolId, actorId: user.id, action: 'PICKUP_CREATED', entity: 'PickupRequest', entityId: created.id, data: { number: created.number, studentIds: ids, branchId: created.branchId } },
           tx,
         );
         return created;
@@ -155,7 +155,7 @@ export async function advanceItem(staff: User, itemId: string, action: 'PREPARE'
     });
     if (res.count !== 1) throw new Conflict('تغيرت حالة العنصر، حدّث الصفحة');
     await writeAudit(
-      { schoolId: item.request.schoolId, actorId: staff.id, action: action === 'PREPARE' ? 'ITEM_PREPARING' : 'ITEM_READY', entity: 'PickupItem', entityId: itemId, data: { requestId: item.requestId } },
+      { schoolId: item.request.schoolId, actorId: staff.id, action: action === 'PREPARE' ? 'ITEM_PREPARING' : 'ITEM_READY', entity: 'PickupItem', entityId: itemId, data: { requestId: item.requestId, branchId: item.request.branchId } },
       tx,
     );
     return tx.pickupItem.findUniqueOrThrow({ where: { id: itemId } });
@@ -176,7 +176,7 @@ export async function changeGate(staff: User, requestId: string, gateId: string,
     if (!locked.open) throw new Conflict('الطلب مغلق');
     await tx.pickupRequest.update({ where: { id: requestId }, data: { gateId } });
     await writeAudit(
-      { schoolId: req.schoolId, actorId: staff.id, action: 'GATE_CHANGED', entity: 'PickupRequest', entityId: requestId, data: { from: req.gateId, to: gateId, at: at.toISOString() } },
+      { schoolId: req.schoolId, actorId: staff.id, action: 'GATE_CHANGED', entity: 'PickupRequest', entityId: requestId, data: { from: req.gateId, to: gateId, at: at.toISOString(), branchId: req.branchId } },
       tx,
     );
   });
@@ -248,7 +248,7 @@ export async function verifyRecipient(staff: User, input: VerifyInput, at: Date 
     ]);
     await tx.verifyAttempt.create({ data: { staffId: staff.id, ok: true, createdAt: at } });
     await writeAudit(
-      { schoolId: req.schoolId, actorId: staff.id, action: 'RECIPIENT_VERIFIED', entity: 'PickupRequest', entityId: requestId, data: { method } },
+      { schoolId: req.schoolId, actorId: staff.id, action: 'RECIPIENT_VERIFIED', entity: 'PickupRequest', entityId: requestId, data: { method, branchId: req.branchId } },
       tx,
     );
     return {
@@ -280,7 +280,7 @@ export async function deliverItems(staff: User, requestId: string, itemIds: stri
     });
     if (res.count !== ids.length) throw new Conflict('بعض العناصر غير جاهزة للتسليم');
     await writeAudit(
-      { schoolId: req.schoolId, actorId: staff.id, action: 'ITEM_DELIVERED', entity: 'PickupRequest', entityId: requestId, data: { itemIds: ids } },
+      { schoolId: req.schoolId, actorId: staff.id, action: 'ITEM_DELIVERED', entity: 'PickupRequest', entityId: requestId, data: { itemIds: ids, branchId: req.branchId } },
       tx,
     );
     await closeIfDone(tx, requestId, at);
@@ -310,7 +310,7 @@ export async function cancelRequest(actor: User, requestId: string, reasonAr?: s
     if (res.count === 0) throw new Conflict('لا توجد عناصر نشطة في هذا الطلب');
     await closeIfDone(tx, requestId, at);
     await writeAudit(
-      { schoolId: req.schoolId, actorId: actor.id, action: 'PICKUP_CANCELLED', entity: 'PickupRequest', entityId: requestId, data: { reason, cancelled: res.count } },
+      { schoolId: req.schoolId, actorId: actor.id, action: 'PICKUP_CANCELLED', entity: 'PickupRequest', entityId: requestId, data: { reason, cancelled: res.count, branchId: req.branchId } },
       tx,
     );
   });
@@ -380,7 +380,7 @@ export async function markArrived(user: User, requestId: string, at: Date = now(
     if (cur.arrivedAt) return false;
     await tx.pickupRequest.update({ where: { id: requestId }, data: { arrivedAt: at } });
     await writeAudit(
-      { schoolId: req.schoolId, actorId: user.id, action: 'PICKUP_ARRIVED', entity: 'PickupRequest', entityId: requestId, data: {} },
+      { schoolId: req.schoolId, actorId: user.id, action: 'PICKUP_ARRIVED', entity: 'PickupRequest', entityId: requestId, data: { branchId: req.branchId } },
       tx,
     );
     return true;
